@@ -1,9 +1,10 @@
+import os
 import asyncio
-import io
-import base64
 import logging
 import tempfile
 from pathlib import Path
+
+os.environ.setdefault("COQUI_TOS_AGREED", "1")
 
 logger = logging.getLogger("jarvis.speech.tts")
 
@@ -14,6 +15,8 @@ LANG_MAP = {
     "de": "de-DE-KatjaNeural",
     "es": "es-ES-ElviraNeural",
 }
+
+_xtts_model = None
 
 class TextToSpeech:
     def __init__(self, config: dict):
@@ -43,6 +46,14 @@ class TextToSpeech:
         else:
             logger.info(f"No voice sample at {self.voice_sample}, XTTS disabled")
 
+    def _get_xtts_model(self):
+        global _xtts_model
+        if _xtts_model is None and self._xtts_available:
+            from TTS.api import TTS
+            _xtts_model = TTS("tts_models/multilingual/multi-dataset/xtts_v2").to(self.device)
+            logger.info("XTTS model loaded once")
+        return _xtts_model
+
     def synthesize(self, text: str, language: str = "it") -> bytes | None:
         if self._xtts_available and self.voice_sample.exists():
             result = self._synthesize_xtts(text, language)
@@ -54,17 +65,11 @@ class TextToSpeech:
 
     def _synthesize_xtts(self, text: str, language: str = "it") -> bytes | None:
         try:
-            import builtins
-            original_input = builtins.input
-            def auto_accept(prompt=""):
-                return "y"
-            builtins.input = auto_accept
-
-            from TTS.api import TTS
-            tts = TTS("tts_models/multilingual/multi-dataset/xtts_v2").to(self.device)
-            builtins.input = original_input
+            model = self._get_xtts_model()
+            if model is None:
+                return None
             with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as tmp:
-                tts.tts_to_file(
+                model.tts_to_file(
                     text=text,
                     speaker_wav=str(self.voice_sample),
                     language=language if language in ("it", "en", "fr", "de", "es") else "en",

@@ -2,7 +2,7 @@ import asyncio
 import logging
 import numpy as np
 from fastapi import WebSocket
-from wake_word.processor import WakeWordProcessor
+from wake_word.processor import get_wake_word_processor
 
 logger = logging.getLogger("jarvis.api.ws")
 
@@ -35,9 +35,10 @@ manager = ConnectionManager()
 
 async def handle_wake_word(ws: WebSocket, config: dict):
     ww_config = config["speech"]["wake_word"]
-    processor = WakeWordProcessor(
+    processor = get_wake_word_processor(
         keyword=ww_config["keyword"],
         sensitivity=ww_config["sensitivity"],
+        model_path=ww_config.get("model_path", ""),
     )
 
     frame_size = processor.frame_length
@@ -58,10 +59,8 @@ async def handle_wake_word(ws: WebSocket, config: dict):
                     await ws.send_json({"type": "wake"})
     except Exception as e:
         logger.debug(f"Wake word connection closed: {e}")
-    finally:
-        processor.delete()
 
-async def handle_audio_stream(ws: WebSocket, stt, brain, router, context, actions, tts):
+async def handle_audio_stream(ws, stt, brain, router, context, actions, tts, persistent_memory=None):
     buffer = bytearray()
     while True:
         try:
@@ -87,13 +86,24 @@ async def handle_audio_stream(ws: WebSocket, stt, brain, router, context, action
                     "language": lang,
                 })
 
-                intent = router.route(text)
+                enriched = text
+                if persistent_memory:
+                    memories = persistent_memory.search(text, n_results=3)
+                    if memories:
+                        memory_context = "\n".join(f"Related memory: {m}" for m in memories)
+                        enriched = f"{text}\n\n{memory_context}"
+
+                intent = router.route(enriched)
                 if intent in actions:
-                    response = await actions[intent].execute(text)
+                    response = await actions[intent].execute(enriched)
                 else:
-                    response = brain.chat(text, context.get_context())
+                    response = brain.chat(enriched, context.get_context(), language=lang, intent=intent)
 
                 context.add_turn("assistant", response)
+
+                if persistent_memory:
+                    persistent_memory.store(text, metadata={"role": "user", "intent": intent})
+                    persistent_memory.store(response, metadata={"role": "assistant", "intent": intent})
 
                 await ws.send_json({
                     "type": "response",

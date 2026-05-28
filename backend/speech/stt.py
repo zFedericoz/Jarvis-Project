@@ -5,7 +5,15 @@ import logging
 logger = logging.getLogger("jarvis.speech.stt")
 
 class SpeechToText:
-    def __init__(self, model_size: str = "base", device: str = "cpu", compute_type: str = "int8"):
+    def __init__(self, config: dict | None = None):
+        if config is None:
+            import yaml
+            with open("config/settings.yaml") as f:
+                config = yaml.safe_load(f)
+        stt_cfg = config["speech"]["stt"]
+        model_size = stt_cfg.get("model", "base")
+        device = stt_cfg.get("device", "cpu")
+        compute_type = stt_cfg.get("compute_type", "int8")
         logger.info(f"Loading Whisper model: {model_size} ({device})")
         self.model = WhisperModel(model_size, device=device, compute_type=compute_type)
 

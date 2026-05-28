@@ -1,7 +1,6 @@
 import subprocess
 import psutil
 import logging
-from pathlib import Path
 from .base_action import BaseAction
 
 logger = logging.getLogger("jarvis.actions.system")
@@ -11,11 +10,11 @@ class SystemControl(BaseAction):
         cmd = command.lower()
 
         if "volume up" in cmd or "alza volume" in cmd:
-            self._change_volume(10)
+            self._change_volume(5)
             return "Volume increased."
 
         if "volume down" in cmd or "abbassa volume" in cmd:
-            self._change_volume(-10)
+            self._change_volume(-5)
             return "Volume decreased."
 
         if "mute" in cmd or "silenzia" in cmd:
@@ -39,9 +38,18 @@ class SystemControl(BaseAction):
         return f"System status: CPU at {cpu}%, RAM at {ram.percent}% ({ram.used // 1024**3}GB/{ram.total // 1024**3}GB used)"
 
     def _change_volume(self, delta: int):
-        import pycaw.pycaw
-        from pycaw.api.endpoint import AudioEndpoint
-        subprocess.run(["nircmd", "changesysvolume", str(delta * 655)])
+        try:
+            import pycaw.pycaw
+            from pycaw.api.endpoint import AudioEndpoint
+            subprocess.run(["nircmd", "changesysvolume", str(delta * 655)])
+        except ImportError:
+            script = f'''
+$obj = New-Object -ComObject WScript.Shell
+for ($i = 0; $i -lt [Math]::Abs({delta}); $i++) {{
+    $obj.SendKeys([char]0xAF)
+}}
+'''
+            subprocess.run(["powershell", "-NoProfile", "-Command", script], capture_output=True)
 
     def can_handle(self, intent: str) -> bool:
         return intent == "system_control"

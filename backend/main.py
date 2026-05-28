@@ -1,13 +1,9 @@
-import os
-import re
-import yaml
-import asyncio
 import logging
-from pathlib import Path
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 import uvicorn
 
+from api.dependencies import resolve_env, get_config
 from api.routes import router
 
 logging.basicConfig(
@@ -16,23 +12,9 @@ logging.basicConfig(
 )
 logger = logging.getLogger("jarvis")
 
-def resolve_env(value):
-    if isinstance(value, str):
-        pattern = r'\$\{(\w+):-([^}]*)\}'
-        def repl(m):
-            return os.environ.get(m.group(1), m.group(2))
-        return re.sub(pattern, repl, value)
-    elif isinstance(value, dict):
-        return {k: resolve_env(v) for k, v in value.items()}
-    elif isinstance(value, list):
-        return [resolve_env(v) for v in value]
-    return value
-
 app = FastAPI(title="J.A.R.V.I.S.", version="2.0.0")
 
-with open("config/settings.yaml") as f:
-    raw = yaml.safe_load(f)
-    config = resolve_env(raw)
+config = get_config()
 
 app.add_middleware(
     CORSMiddleware,

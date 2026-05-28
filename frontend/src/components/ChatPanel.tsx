@@ -1,7 +1,57 @@
-import { useRef, useState, useEffect } from 'react'
+import { useRef, useState, useEffect, useCallback } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
 import { useStore } from '../hooks/useStore'
 import { JARVIS_COLORS, API_URL } from '../utils/constants'
+import type { WSMessage } from '../types'
+
+function FeedbackButtons({ userMsg, assistantMsg, language, intent }: {
+  userMsg: string; assistantMsg: string; language?: string; intent?: string
+}) {
+  const [sent, setSent] = useState<'up' | 'down' | null>(null)
+
+  const sendFeedback = useCallback(async (rating: number) => {
+    if (sent) return
+    try {
+      await fetch(`${API_URL}/feedback`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          user_message: userMsg,
+          assistant_response: assistantMsg,
+          rating,
+          language: language || 'it',
+          intent: intent || 'chat',
+        }),
+      })
+      setSent(rating === 2 ? 'up' : 'down')
+    } catch { /* ignore */ }
+  }, [userMsg, assistantMsg, language, intent, sent])
+
+  return (
+    <div style={{ display: 'flex', gap: 6, marginTop: 4, opacity: sent ? 0.4 : 0.6 }}>
+      <span
+        onClick={() => sendFeedback(2)}
+        style={{
+          cursor: sent ? 'default' : 'pointer',
+          fontSize: 12,
+          color: sent === 'up' ? JARVIS_COLORS.success : JARVIS_COLORS.textDim,
+          transition: 'color 0.2s',
+        }}
+        title="Buona risposta"
+      >👍</span>
+      <span
+        onClick={() => sendFeedback(1)}
+        style={{
+          cursor: sent ? 'default' : 'pointer',
+          fontSize: 12,
+          color: sent === 'down' ? JARVIS_COLORS.error : JARVIS_COLORS.textDim,
+          transition: 'color 0.2s',
+        }}
+        title="Risposta non utile"
+      >👎</span>
+    </div>
+  )
+}
 
 export default function ChatPanel() {
   const messages = useStore((s) => s.messages)
@@ -89,6 +139,14 @@ export default function ChatPanel() {
     }
   }
 
+  const getLastUserText = (currentIndex: number): string => {
+    for (let i = currentIndex - 1; i >= 0; i--) {
+      const txt = messages[i].text
+      if (messages[i].type === 'transcription' && txt) return txt
+    }
+    return ''
+  }
+
   return (
     <div style={{
       position: 'fixed',
@@ -135,6 +193,14 @@ export default function ChatPanel() {
                 <div style={{ fontSize: 9, opacity: 0.4, marginTop: 4 }}>
                   intent: {msg.intent}
                 </div>
+              )}
+              {msg.type === 'response' && msg.text && (
+                <FeedbackButtons
+                  userMsg={getLastUserText(i)}
+                  assistantMsg={msg.text}
+                  language={msg.language}
+                  intent={msg.intent}
+                />
               )}
             </motion.div>
           ))}

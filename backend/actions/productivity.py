@@ -1,7 +1,8 @@
 import time
 import threading
+import re
+import subprocess
 import logging
-from datetime import datetime, timedelta
 from .base_action import BaseAction
 
 logger = logging.getLogger("jarvis.actions.productivity")
@@ -23,7 +24,6 @@ class Productivity(BaseAction):
         return "Timer set."
 
     def _set_timer(self, cmd: str) -> str:
-        import re
         minutes = 0
         seconds = 0
 
@@ -47,9 +47,22 @@ class Productivity(BaseAction):
         self._notify("Timer finished!")
 
     def _notify(self, message: str):
-        import subprocess
-        subprocess.run([
-            "powershell",
-            "-c",
-            f'New-BurntToastNotification -Text "{message}"',
-        ])
+        try:
+            subprocess.run([
+                "powershell",
+                "-NoProfile",
+                "-Command",
+                f'''
+                $null = [System.Reflection.Assembly]::LoadWithPartialName("System.Windows.Forms")
+                $notify = New-Object System.Windows.Forms.NotifyIcon
+                $notify.Icon = [System.Drawing.SystemIcons]::Information
+                $notify.BalloonTipTitle = "J.A.R.V.I.S."
+                $notify.BalloonTipText = "{message}"
+                $notify.Visible = $true
+                $notify.ShowBalloonTip(5000)
+                Start-Sleep -Seconds 5
+                $notify.Dispose()
+                ''',
+            ], timeout=10)
+        except Exception as e:
+            logger.warning(f"Notification failed: {e}")

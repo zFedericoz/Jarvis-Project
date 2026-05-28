@@ -6,14 +6,20 @@ from pathlib import Path
 logger = logging.getLogger("jarvis.memory.persistent")
 
 class PersistentMemory:
-    def __init__(self, persist_dir: str = "data/chroma_db", collection_name: str = "jarvis_memories"):
+    def __init__(self, config: dict | None = None):
+        persist_dir = "data/chroma_db"
+        collection_name = "jarvis_memories"
+        if config is not None:
+            mem_cfg = config.get("memory", {}).get("long_term", {})
+            persist_dir = mem_cfg.get("persist_dir", persist_dir)
+            collection_name = mem_cfg.get("collection", collection_name)
         Path(persist_dir).mkdir(parents=True, exist_ok=True)
         self.client = chromadb.PersistentClient(
             path=persist_dir,
             settings=Settings(anonymized_telemetry=False),
         )
         self.collection = self.client.get_or_create_collection(name=collection_name)
-        logger.info(f"Persistent memory initialized: {persist_dir}")
+        logger.info(f"Persistent memory initialized: {persist_dir}/{collection_name}")
 
     def store(self, text: str, metadata: dict | None = None, doc_id: str | None = None):
         from uuid import uuid4
