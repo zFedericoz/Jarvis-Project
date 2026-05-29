@@ -7,7 +7,7 @@ Attivazione vocale ("Jarvis"), input testuale, HUD olografico 3D, risposta vocal
 
 ```
 ┌─ Host Windows ──────────────────────────────────┐
-│  Ollama (qwen2.5:7b) ←──── host.docker.internal  │
+│  Ollama (qwen2.5:14b) ←─── host.docker.internal │
 │  ┌─ Docker ──────────────────────────────────┐   │
 │  │  redis ← backend ← frontend (nginx)       │   │
 │  └───────────────────────────────────────────┘   │
@@ -21,8 +21,8 @@ Attivazione vocale ("Jarvis"), input testuale, HUD olografico 3D, risposta vocal
 ## Requisiti
 
 - **Windows 10/11** con Docker Desktop
-- **~8 GB RAM** libera per il LLM
-- **~8 GB spazio su disco** (modelli inclusi)
+- **~12 GB RAM** libera per il LLM (qwen2.5:14b ~9 GB + overhead)
+- **~15 GB spazio su disco** (modelli inclusi)
 
 ## Primo avvio
 
@@ -31,12 +31,16 @@ Attivazione vocale ("Jarvis"), input testuale, HUD olografico 3D, risposta vocal
 Scarica da [ollama.com](https://ollama.com) e installa. Poi:
 
 ```powershell
-ollama pull qwen2.5:7b
+ollama pull qwen2.5:14b
+ollama pull mxbai-embed-large
 ```
 
 ### 2. Avvia J.A.R.V.I.S.
 
 ```powershell
+# Crea le directory dati (ignorate da .gitignore)
+mkdir data\chroma_db data\hf_cache models
+
 # Dalla cartella del progetto
 docker compose up -d --build
 ```
@@ -76,6 +80,48 @@ Il sistema riconosce automaticamente l'intento:
 | `productivity` | "Imposta un timer" / "Ricordami di..." |
 
 Se l'intento non viene riconosciuto, J.A.R.V.I.S. risponde via LLM.
+
+## Trasferimento su nuovo PC (con GPU NVIDIA)
+
+Il progetto è già pronto per GPU. Su un PC con scheda NVIDIA (es. RTX 4060 Ti), i tempi di risposta passano da ~4 minuti a **<1 secondo**.
+
+```powershell
+# 1. Clona la repo sul nuovo PC
+git clone <url-repo>
+cd jarvis-project
+
+# 2. Installa Docker Desktop con supporto WSL2 + GPU NVIDIA
+#    (https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/install-guide.html)
+
+# 3. Installa Ollama su Windows nativo
+#    Scarica da https://ollama.com
+
+# 4. Scarica i modelli
+ollama pull qwen2.5:14b
+ollama pull mxbai-embed-large
+
+# 5. Ferma il vecchio modello 7b (libera ~5 GB RAM)
+ollama stop qwen2.5:7b
+
+# 6. Crea le directory dati (ignorate da .gitignore)
+mkdir data\chroma_db data\hf_cache models
+
+# 7. (Opzionale) Riattiva la reflection per auto-valutazione qualità
+#    Apri backend/brain/multiagent.py, riga ~161:
+#    Cambia max_reflect_rounds=0 → max_reflect_rounds=1
+
+# 8. Avvia
+docker compose up -d --build
+```
+
+Verifica che Ollama usi la GPU:
+
+```powershell
+ollama ps
+# Deve mostrare: PROCESSOR   100% GPU
+```
+
+Se vedi `100% CPU`, controlla che `num_gpu` in `backend/config/settings.yaml` sia `-1` (auto-detect).
 
 ## Personalizzazione
 
@@ -119,11 +165,14 @@ docker compose down
 
 ## Note tecniche
 
-- **LLM**: Ollama + qwen2.5:7b, keep_alive=-1 (sempre in RAM)
-- **Risposte**: ~70ms dopo warmup iniziale (~12s all'avvio)
+- **LLM**: Ollama + qwen2.5:14b, keep_alive=-1 (sempre in RAM)
+- **Reflection**: auto-valutazione qualità (disabilitata su CPU, riattivabile su GPU)
+- **Web search**: DuckDuckGo automatico per domande su news/meteo/attualità
+- **Feedback utente**: pulsanti ▲/▼ su ogni risposta, salvato in `data/feedback.jsonl`
 - **STT**: faster-whisper (tiny, CPU, int8)
 - **TTS**: edge-tts (voci naturali, nessun modello da scaricare)
 - **Wake word**: Porcupine v1.9.5
 - **Memoria**: Redis (breve termine) + ChromaDB (lungo termine, RAG)
 - **Dashboard**: Three.js (React), grafici real-time CPU/RAM/temperatura/disk
+- **GPU**: `num_gpu: -1` in settings.yaml → auto-detect GPU NVIDIA
 - **Niente cloud**: tutto gira in locale

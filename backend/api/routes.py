@@ -6,8 +6,6 @@ import subprocess
 import re
 from datetime import datetime, timezone
 from collections import deque
-import asyncio
-from functools import partial
 from fastapi import APIRouter, WebSocket, UploadFile, File, Request
 from pydantic import BaseModel
 from pathlib import Path
@@ -228,30 +226,30 @@ async def chat_text(payload: ChatRequest, request: Request = None):
     lang = llm.detect_language(text)
     context.set_language(lang)
 
+    original_query = text
     memories = persistent_memory.search(text, n_results=3)
     if memories:
         memory_context = "\n".join(f"Related memory: {m}" for m in memories)
-        text = f"{text}\n\n{memory_context}"
-
-    if request and await request.is_disconnected():
-        return ChatResponse(response="Richiesta interrotta.", intent="none", language="it", audio=None)
-
-    intent = intent_router.route(text)
-    if intent in actions:
-        response = await actions[intent].execute(text)
+        prompt = f"{text}\n\n{memory_context}"
     else:
-        loop = asyncio.get_event_loop()
-        response = await loop.run_in_executor(
-            None, partial(multiagent.chat, text, context.get_context(), language=lang, intent=intent)
-        )
+        prompt = text
 
     if request and await request.is_disconnected():
         return ChatResponse(response="Richiesta interrotta.", intent="none", language="it", audio=None)
 
-    context.add_turn("user", text)
+    intent = intent_router.route(original_query)
+    if intent in actions:
+        response = await actions[intent].execute(original_query)
+    else:
+        response = multiagent.chat(prompt, context.get_context(), language=lang, intent=intent, search_query=original_query)
+
+    if request and await request.is_disconnected():
+        return ChatResponse(response="Richiesta interrotta.", intent="none", language="it", audio=None)
+
+    context.add_turn("user", original_query)
     context.add_turn("assistant", response)
 
-    persistent_memory.store(text, metadata={"role": "user", "intent": intent})
+    persistent_memory.store(original_query, metadata={"role": "user", "intent": intent})
     persistent_memory.store(response, metadata={"role": "assistant", "intent": intent})
 
     return ChatResponse(

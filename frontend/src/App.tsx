@@ -259,12 +259,25 @@ export default function JarvisDashboard() {
   const [listening, setListening] = useState(false);
   const [isResponding, setIsResponding] = useState(false);
   const [chatInput, setChatInput] = useState("");
-  const [messages, setMessages] = useState<{role:string;text:string}[]>([
-    {role:"system",text:"Sistemi ausiliari inizializzati. Reattore ARC stabile. In attesa di comandi, Signore."}
+  const [messages, setMessages] = useState<{id:number;role:string;text:string}[]>([
+    {id:0,role:"system",text:"Sistemi ausiliari inizializzati. Reattore ARC stabile. In attesa di comandi, Signore."}
   ]);
+  const [feedbackSent, setFeedbackSent] = useState<Record<number,number>>({});
+  const msgIdRef = useRef(1);
   const chatEndRef = useRef<HTMLDivElement>(null!);
   const chatContainerRef = useRef<HTMLDivElement>(null!);
   const abortRef = useRef<AbortController | null>(null);
+
+  const sendFeedback = async (msgId:number, rating:number, userMsg:string, assistantMsg:string) => {
+    if (feedbackSent[msgId]) return;
+    try {
+      await fetch(`${DOCKER_API}/api/feedback`, {
+        method:"POST", headers:{"Content-Type":"application/json"},
+        body:JSON.stringify({message_id:String(msgId),user_message:userMsg,assistant_response:assistantMsg,rating,language:"it",intent:"chat"}),
+      });
+      setFeedbackSent(p => ({...p, [msgId]:rating}));
+    } catch {}
+  };
 
   const fetchMetrics = useCallback(async () => {
     const d = await fetchFromBest([`${HOST_METRICS_URL}/api/system/metrics`, `${DOCKER_API}/api/system/metrics`]);
@@ -293,7 +306,8 @@ export default function JarvisDashboard() {
     e.preventDefault();
     if (!chatInput.trim() || isResponding) return;
     const userMsg = chatInput.trim();
-    setMessages(p => [...p, {role:"user",text:userMsg}]);
+    const uid = msgIdRef.current++;
+    setMessages(p => [...p, {id:uid,role:"user",text:userMsg}]);
     setChatInput("");
     setIsResponding(true);
 
@@ -310,15 +324,17 @@ export default function JarvisDashboard() {
       abortRef.current = null;
       if (!r.ok) throw new Error(`HTTP ${r.status}`);
       const d = await r.json();
-      setMessages(p => [...p, {role:"system",text:d.response || d.detail || "OK"}]);
+      const sid = msgIdRef.current++;
+      setMessages(p => [...p, {id:sid,role:"system",text:d.response || d.detail || "OK"}]);
     } catch (err) {
       const aborted = (err as Error)?.name === "AbortError";
       clearTimeout(timeout);
       abortRef.current = null;
+      const eid = msgIdRef.current++;
       if (aborted) {
-        setMessages(p => [...p, {role:"system",text:"Richiesta interrotta."}]);
+        setMessages(p => [...p, {id:eid,role:"system",text:"Richiesta interrotta."}]);
       } else {
-        setMessages(p => [...p, {role:"system",text:`Errore di connessione al server. Verifica che il backend sia in esecuzione.`}]);
+        setMessages(p => [...p, {id:eid,role:"system",text:`Errore di connessione al server. Verifica che il backend sia in esecuzione.`}]);
       }
     }
     setIsResponding(false);
@@ -386,20 +402,31 @@ export default function JarvisDashboard() {
               <div style={{flex:1}} />
               {messages.length > 1 && (
                 <div ref={chatContainerRef} style={{maxHeight:"55%",overflowY:"auto",padding:"6px 10px",display:"flex",flexDirection:"column",gap:6}}>
-                  {messages.slice(1).map((msg,i) => (
-                    <div key={i} style={{
+                  {messages.slice(1).map((msg,i,arr) => {
+                    const prevUser = msg.role==="system" ? arr.slice(0,i).reverse().find(m => m.role==="user") : null;
+                    return (
+                    <div key={msg.id} style={{
                       alignSelf: msg.role==="user" ? "flex-end" : "flex-start",
                       background: msg.role==="user" ? C.cyanFaint : "rgba(0,255,136,0.05)",
                       borderLeft: msg.role==="system" ? `2px solid ${C.green}` : "none",
                       borderRight: msg.role==="user" ? `2px solid ${C.cyan}` : "none",
-                      padding:"5px 8px",borderRadius:4,maxWidth:"90%",fontSize:10,lineHeight:1.4,
+                      padding:"5px 8px",borderRadius:4,maxWidth:"90%",fontSize:10,lineHeight:1.4,position:"relative",
                     }}>
                       <span style={{fontSize:8,color:msg.role==="user"?C.cyan:C.green,display:"block",marginBottom:1}}>
                         {msg.role==="user" ? "TU" : "J.A.R.V.I.S."}
                       </span>
                       {msg.text}
+                      {msg.role==="system" && prevUser && (
+                        <div style={{display:"flex",gap:4,marginTop:4}}>
+                          <span onClick={() => sendFeedback(msg.id,2,prevUser.text,msg.text)}
+                            style={{cursor:"pointer",fontSize:11,color:feedbackSent[msg.id]===2?C.green:C.textFaint,opacity:0.6}}>▲</span>
+                          <span onClick={() => sendFeedback(msg.id,1,prevUser.text,msg.text)}
+                            style={{cursor:"pointer",fontSize:11,color:feedbackSent[msg.id]===1?C.red:C.textFaint,opacity:0.6}}>▼</span>
+                        </div>
+                      )}
                     </div>
-                  ))}
+                    );
+                  })}
                   <div ref={chatEndRef} />
                 </div>
               )}

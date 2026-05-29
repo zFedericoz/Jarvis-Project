@@ -1,4 +1,6 @@
 import logging
+import re
+from duckduckgo_search import DDGS
 
 logger = logging.getLogger("jarvis.brain.multiagent")
 
@@ -97,6 +99,16 @@ Sei un assistente generale. Segui queste regole:
 """,
 }
 
+NEED_SEARCH_PATTERNS = [
+    r"\b(notizie|ultime|news|breaking|aggiornament)\b",
+    r"\b(meteo|tempo|che tempo|previsioni)\b",
+    r"\b(classifica|risultato|punteggio|partita)\b",
+    r"\b(cos.è|chi è|che cos.è|che cosa.sono)\b",
+    r"\b(prezzo|quanto costa|quanto costano)\b",
+    r"\b(elezion|presidente|governo|ministro|politic)\b",
+    r"\b(ultimo|ultima|recente|nuovo|nuova)\s+\w{2,}",
+]
+
 class MultiAgent:
     def __init__(self, llm_client):
         self.llm = llm_client
@@ -108,11 +120,43 @@ class MultiAgent:
         prompts = SPECIALIST_PROMPTS_IT if language == "it" else SPECIALIST_PROMPTS
         return prompts.get(category, prompts["general"])
 
+    def _needs_web_search(self, message: str) -> bool:
+        return any(re.search(p, message.lower()) for p in NEED_SEARCH_PATTERNS)
+
+    def _search_web(self, query: str, max_results: int = 3) -> str:
+        try:
+            with DDGS() as ddgs:
+                results = list(ddgs.text(query, max_results=max_results))
+            if not results:
+                return ""
+            lines = []
+            for r in results:
+                title = r.get("title", "")
+                body = r.get("body", "")
+                lines.append(f"- {title}: {body[:200]}")
+            return "\n".join(lines)
+        except Exception as e:
+            logger.warning(f"Web search failed: {e}")
+            return ""
+
     def chat(self, message: str, context: list[dict] | None = None,
-             language: str = "it", intent: str = "general") -> str:
+             language: str = "it", intent: str = "general", search_query: str | None = None) -> str:
         category = self._map_intent(intent)
         specialist = self._specialist_prompt(category, language)
-        return self.llm.chat(
+
+        extra_context = ""
+        query = search_query or message
+        if self._needs_web_search(query):
+            logger.info(f"Auto web search triggered for: {query[:80]}")
+            results = self._search_web(query)
+            if results:
+                extra_context = f"\n\nWeb search results:\n{results}\n\nUse these results to answer accurately. If they are not relevant, ignore them."
+                logger.info(f"Web search returned {len(results)} chars of results")
+
+        full_specialist = specialist + extra_context if extra_context else specialist
+
+        return self.llm.chat_with_reflection(
             message, context, language,
-            extra_system_prompt=specialist,
+            extra_system_prompt=full_specialist,
+            min_score=7, max_reflect_rounds=0,
         )

@@ -4,12 +4,13 @@
 
 llm:
   provider: ollama
-  model: qwen2.5:7b
+  model: qwen2.5:14b
+  # reflection_model: qwen2.5:14b  # scommenta per usare un modello diverso per auto-valutazione
   embedding_model: mxbai-embed-large
   host: ${OLLAMA_HOST:-http://localhost:11434}
   temperature: 0.3
   context_window: 4096
-  num_gpu: 0
+  num_gpu: -1           # -1 = auto (usa GPU se disponibile), 0 = CPU, N = numero layers GPU
 
 speech:
   stt:
