@@ -3,97 +3,98 @@
 Assistente AI personale ispirato a Iron Man, completamente locale.  
 Attivazione vocale ("Jarvis"), input testuale, HUD olografico 3D, risposta vocale.
 
+## Architettura
+
+```
+┌─ Host Windows ──────────────────────────────────┐
+│  Ollama (qwen2.5:7b) ←──── host.docker.internal  │
+│  ┌─ Docker ──────────────────────────────────┐   │
+│  │  redis ← backend ← frontend (nginx)       │   │
+│  └───────────────────────────────────────────┘   │
+└──────────────────────────────────────────────────┘
+```
+
+- **Ollama** gira nativamente su Windows (non in Docker)
+- **Backend**, **Redis**, **Frontend** girano in container Docker
+- Il backend si connette a Ollama via `host.docker.internal:11434`
+
 ## Requisiti
 
-- **Windows 10/11** con supporto Docker
-- **GPU NVIDIA RTX 4060 Ti** (o equivalente, ma tutto funziona anche su CPU)
-- **32 GB RAM**
-- **~10 GB spazio su disco** (modelli inclusi)
+- **Windows 10/11** con Docker Desktop
+- **~8 GB RAM** libera per il LLM
+- **~8 GB spazio su disco** (modelli inclusi)
 
 ## Primo avvio
 
-```powershell
-# 1. Clona/reperisci il progetto
-cd Jarvis-Project
+### 1. Installa Ollama su Windows
 
-# 2. Avvia tutto (scarica automaticamente i modelli LLM ~4.9 GB)
+Scarica da [ollama.com](https://ollama.com) e installa. Poi:
+
+```powershell
+ollama pull qwen2.5:7b
+```
+
+### 2. Avvia J.A.R.V.I.S.
+
+```powershell
+# Dalla cartella del progetto
 docker compose up -d --build
 ```
 
-Questo comando avvia 4 container:
-- `ollama` — LLM + embedding
+Questo avvia 3 container:
 - `redis` — memoria a breve termine
-- `backend` — API FastAPI (Python)
-- `frontend` — interfaccia web (Nginx)
+- `backend` — API FastAPI (Python) su `:8765`
+- `frontend` — interfaccia web (Nginx) su `:80`
 
-### Download modelli
+### 3. Apri il browser
 
-Ollama scarica `llama3.1:8b` (4.9 GB) al primo `docker compose up`.  
-Per monitorare o forzare il download:
+http://localhost:80
 
-```powershell
-docker compose exec ollama ollama pull llama3.1:8b
-```
+La prima richiesta richiede ~12s (warmup del LLM), tutte le successive sono **<100ms** (modello tenuto caldo in RAM con `keep_alive=-1`).
 
 ## Accesso
 
 | Cosa | URL |
 |------|-----|
 | Interfaccia | http://localhost |
-| Backend API | http://localhost/api/status |
+| Backend API | http://localhost:8765/api/status |
 
-## Modalità d'uso
+## Uso
 
-### Testo
-Scrivi nella finestra "Scrivi un messaggio..." in basso a destra e premi **INVIA** o **Enter**.
+### Chat testuale
+Scrivi in basso a destra e premi **INVIA** o **Enter**.
 
-### Voce (wake word)
-1. Concedi il permesso microfono al browser
-2. Il sistema ascolta la parola "Jarvis" in background
-3. Dopo il risveglio, parla — l'audio viene trascritto, processato e ricevi risposta vocale
-4. La connessione si chiude dopo la risposta; il wake word si riattiva
-
-### Pulsante microfono
-Clicca l'indicatore di stato per avviare/fermare la registrazione manualmente.
-
-## Comandi speciali
-
+### Comandi speciali
 Il sistema riconosce automaticamente l'intento:
 
 | Intento | Esempio |
 |---------|---------|
 | `greeting` | "Ciao" / "Buongiorno" |
 | `system_control` | "Spegni il computer" / "Apri calcolatrice" |
-| `web_search` | "Cerca su Internet..." |
+| `web_search` | "Cerca su Internet notizie" |
 | `media_player` | "Metti musica" / "Alza volume" |
 | `productivity` | "Imposta un timer" / "Ricordami di..." |
 
-Se l'intento non viene riconosciuto, J.A.R.V.I.S. risponde usando il LLM.
+Se l'intento non viene riconosciuto, J.A.R.V.I.S. risponde via LLM.
 
 ## Personalizzazione
 
-### Voce clone (XTTS)
-Per attivare la voce clonata (idealmente Paul Bettany che parla italiano):
-
-1. Prepara un file audio **WAV** (10-30 secondi) della voce da clonare
-2. Mettilo in `models/voice/jarvis_sample.wav`
-3. Riavvia il backend:
-   ```powershell
-   docker compose restart backend
-   ```
-
-Senza questo file, J.A.R.V.I.S. usa Piper TTS (voce sintetica italiana).
-
 ### Prompt di sistema
-Modifica `backend/config/persona.yaml` per cambiare tono, tratti o capacità.
+Modifica `backend/config/persona.yaml` per cambiare tono e comportamento.
 
 ### Modello LLM
 Cambia `backend/config/settings.yaml` → `llm.model`, poi:
 
 ```powershell
-docker compose exec ollama ollama pull <nuovo-modello>
+ollama pull <nuovo-modello>
 docker compose restart backend
 ```
+
+Consigliati: `llama3.1:8b`, `qwen2.5:14b`, `mistral:7b`.
+
+### Voce
+J.A.R.V.I.S. usa **edge-tts** (voci naturali Windows, nessun download).
+Per usare una voce clone XTTS, metti `models/voice/jarvis_sample.wav` (WAV 10-30s).
 
 ## Comandi utili
 
@@ -101,16 +102,14 @@ docker compose restart backend
 # Stato container
 docker compose ps
 
-# Log backend
+# Log
 docker compose logs -f backend
-
-# Log frontend
 docker compose logs -f frontend
 
-# Riavvia tutto
+# Riavvia
 docker compose restart
 
-# Ricostruisci (dopo modifiche)
+# Ricostruisci dopo modifiche
 docker compose build backend frontend
 docker compose up -d
 
@@ -120,8 +119,11 @@ docker compose down
 
 ## Note tecniche
 
-- **Microfono**: catturato dal browser (non dal backend) — compatibile con Docker
-- **Wake word**: Porcupine v1.9.5 (ultima versione che non richiede API key Picovoice)
-- **LLM**: Ollama + llama3.1:8b, accesso via libreria Python `ollama` v0.6.x
-- **PCM audio**: stream grezzo PCM16 a 16kHz (non compresso) via WebSocket
-- **TTS**: audio WAV restituito come base64 nella risposta JSON del REST endpoint
+- **LLM**: Ollama + qwen2.5:7b, keep_alive=-1 (sempre in RAM)
+- **Risposte**: ~70ms dopo warmup iniziale (~12s all'avvio)
+- **STT**: faster-whisper (tiny, CPU, int8)
+- **TTS**: edge-tts (voci naturali, nessun modello da scaricare)
+- **Wake word**: Porcupine v1.9.5
+- **Memoria**: Redis (breve termine) + ChromaDB (lungo termine, RAG)
+- **Dashboard**: Three.js (React), grafici real-time CPU/RAM/temperatura/disk
+- **Niente cloud**: tutto gira in locale

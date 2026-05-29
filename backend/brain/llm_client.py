@@ -24,6 +24,10 @@ class LLMClient:
         self.client = ollama.Client(host=host)
         logger.info(f"LLM initialized: {self.model} @ {host} (GPU={self.num_gpu})")
 
+    def warmup(self):
+        self.client.chat(model=self.model, messages=[{"role": "user", "content": ""}], keep_alive=-1)
+        logger.info("LLM model warmed up (keep_alive=-1)")
+
     def chat(self, message: str, context: list[dict] | None = None, language: str = "it",
              extra_system_prompt: str = "") -> str:
         messages = self._build_messages(message, context, language, extra_system_prompt)
@@ -31,6 +35,7 @@ class LLMClient:
             model=self.model,
             messages=messages,
             options={"temperature": self.temperature, "num_gpu": self.num_gpu},
+            keep_alive=-1,
         )
         return resp["message"]["content"]
 
@@ -77,6 +82,7 @@ class LLMClient:
                 messages=[{"role": "system", "content": "You are a strict quality evaluator. Reply only with a number."},
                           {"role": "user", "content": prompt}],
                 options={"temperature": 0, "num_gpu": self.num_gpu},
+                keep_alive=-1,
             )
             score_text = resp["message"]["content"].strip()
             score = int(''.join(c for c in score_text if c.isdigit()) or "5")
@@ -99,6 +105,7 @@ class LLMClient:
             model=self.model,
             messages=messages,
             options={"temperature": self.temperature * 0.5, "num_gpu": self.num_gpu},
+            keep_alive=-1,
         )
         return resp["message"]["content"]
 

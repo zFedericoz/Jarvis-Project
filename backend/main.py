@@ -1,9 +1,10 @@
+import asyncio
 import logging
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 import uvicorn
 
-from api.dependencies import resolve_env, get_config
+from api.dependencies import resolve_env, get_config, get_brain, get_speech, get_actions, get_memory
 from api.routes import router
 
 logging.basicConfig(
@@ -36,6 +37,21 @@ async def startup():
     logger.info(f"  TTS: {config['speech']['tts']['engine']}")
     logger.info(f"  Vision: {'enabled' if config['vision']['enabled'] else 'disabled'}")
     logger.info("=" * 50)
+
+    asyncio.create_task(_warmup_all(config))
+
+async def _warmup_all(config):
+    try:
+        logger.info("  Initializing all components...")
+        llm, _, _ = get_brain(config)
+        get_speech(config)
+        get_actions(config)
+        get_memory(config)
+        logger.info("  LLM warmup started (loading model into RAM)...")
+        llm.warmup()
+        logger.info("  All components ready — model is hot")
+    except Exception as e:
+        logger.warning(f"  Warmup failed (non-critical): {e}")
 
 @app.on_event("shutdown")
 async def shutdown():

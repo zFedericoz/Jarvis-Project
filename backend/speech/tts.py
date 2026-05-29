@@ -100,10 +100,6 @@ class TextToSpeech:
             return None
 
     async def synthesize_async(self, text: str, language: str = "it") -> bytes | None:
-        if self._xtts_available and self.voice_sample.exists():
-            result = self._synthesize_xtts(text, language)
-            if result:
-                return result
         if self._edge_available:
             try:
                 import edge_tts

@@ -1,14 +1,37 @@
 param(
     [switch]$NoFrontend,
-    [switch]$NoBackend
+    [switch]$NoBackend,
+    [switch]$NoMetrics
 )
-
-Write-Host "=== J.A.R.V.I.S. Launcher ===" -ForegroundColor Cyan
 
 $root = Split-Path -Parent $PSScriptRoot
 
+Write-Host "=== J.A.R.V.I.S. Launcher ===" -ForegroundColor Cyan
+
+$pythonPath = (Get-Command python).Source
+$backendDir = Join-Path $root "backend"
+
+if (-not $NoMetrics) {
+    Write-Host "Avvio Host Metrics Server (metriche reali del PC)..." -ForegroundColor Yellow
+    $metricsJob = Start-Job -Name "HostMetrics" -ScriptBlock {
+        param($py, $dir)
+        Set-Location $dir
+        & $py host_metrics_server.py
+    } -ArgumentList $pythonPath, $backendDir
+    Start-Sleep -Seconds 3
+    $ms = Get-Job -Name "HostMetrics" -ErrorAction SilentlyContinue
+    if ($ms.State -eq 'Running') {
+        Write-Host "  Host Metrics: http://localhost:18765" -ForegroundColor Green
+    } else {
+        Write-Host "  Host Metrics: ERRORE" -ForegroundColor Red
+        $ms | Receive-Job -ErrorAction SilentlyContinue | ForEach-Object { Write-Host "    $_" -ForegroundColor Red }
+        Remove-Job -Name "HostMetrics" -Force -ErrorAction SilentlyContinue
+        $metricsJob = $null
+    }
+}
+
 if (-not $NoBackend) {
-    Write-Host "Starting backend..." -ForegroundColor Yellow
+    Write-Host "Avvio backend..." -ForegroundColor Yellow
     $backendJob = Start-Job -ScriptBlock {
         Set-Location $using:root\backend
         python main.py
@@ -18,7 +41,7 @@ if (-not $NoBackend) {
 }
 
 if (-not $NoFrontend) {
-    Write-Host "Starting frontend..." -ForegroundColor Yellow
+    Write-Host "Avvio frontend..." -ForegroundColor Yellow
     $frontendJob = Start-Job -ScriptBlock {
         Set-Location $using:root\frontend
         npm run dev
@@ -27,26 +50,27 @@ if (-not $NoFrontend) {
 }
 
 Write-Host ""
-Write-Host "J.A.R.V.I.S. is running!" -ForegroundColor Green
-Write-Host "  Frontend: http://localhost:5173"
-Write-Host "  Backend:  http://localhost:8765"
+Write-Host "J.A.R.V.I.S. è in esecuzione!" -ForegroundColor Green
+Write-Host "  Frontend:       http://localhost:5173"
+Write-Host "  Backend:        http://localhost:8765"
+if (-not $NoMetrics) {
+    Write-Host "  Host Metrics:  http://localhost:18765 (metriche reali)"
+}
 Write-Host ""
-Write-Host "Press Ctrl+C to stop all services." -ForegroundColor Cyan
+Write-Host "Premi Ctrl+C per fermare tutto." -ForegroundColor Cyan
 
 try {
     while ($true) {
         Start-Sleep -Seconds 1
-        if (-not $NoBackend) {
+        if ((-not $NoBackend) -and $backendJob) {
             $bj = Get-Job -Id $backendJob.Id -ErrorAction SilentlyContinue
-            if ($bj.State -eq 'Failed') {
-                Receive-Job -Job $bj
-                throw "Backend crashed"
-            }
+            if ($bj.State -eq 'Failed') { Receive-Job -Job $bj; throw "Backend crashed" }
         }
     }
 } finally {
-    Write-Host "Shutting down..." -ForegroundColor Yellow
-    if (-not $NoBackend) { Stop-Job -Id $backendJob.Id -ErrorAction SilentlyContinue; Remove-Job -Id $backendJob.Id -Force -ErrorAction SilentlyContinue }
-    if (-not $NoFrontend) { Stop-Job -Id $frontendJob.Id -ErrorAction SilentlyContinue; Remove-Job -Id $frontendJob.Id -Force -ErrorAction SilentlyContinue }
-    Write-Host "Done." -ForegroundColor Green
+    Write-Host "Arresto in corso..." -ForegroundColor Yellow
+    if ($frontendJob) { Stop-Job -Id $frontendJob.Id -ErrorAction SilentlyContinue; Remove-Job -Id $frontendJob.Id -Force -ErrorAction SilentlyContinue }
+    if ($backendJob) { Stop-Job -Id $backendJob.Id -ErrorAction SilentlyContinue; Remove-Job -Id $backendJob.Id -Force -ErrorAction SilentlyContinue }
+    if ($metricsJob) { Stop-Job -Id $metricsJob.Id -ErrorAction SilentlyContinue; Remove-Job -Id $metricsJob.Id -Force -ErrorAction SilentlyContinue }
+    Write-Host "Fatto." -ForegroundColor Green
 }

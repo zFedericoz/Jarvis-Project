@@ -1,19 +1,4 @@
 services:
-  ollama:
-    image: ollama/ollama:latest
-    ports:
-      - "11434:11434"
-    volumes:
-      - ollama_data:/root/.ollama
-    restart: unless-stopped
-    networks:
-      - jarvis-net
-    healthcheck:
-      test: ["CMD", "ollama", "list"]
-      interval: 30s
-      timeout: 10s
-      retries: 5
-
   redis:
     image: redis:7-alpine
     ports:
@@ -35,14 +20,14 @@ services:
       - "8765:8765"
     volumes:
       - ./data:/app/data
+      - ./data/chroma_cache:/root/.cache/chroma
+      - ./data/hf_cache:/root/.cache/huggingface
       - ./models:/app/models
-      - ./backend/config:/app/config
+      - ./backend:/app
     environment:
-      - OLLAMA_HOST=http://ollama:11434
+      - OLLAMA_HOST=http://host.docker.internal:11434
       - REDIS_HOST=redis
     depends_on:
-      ollama:
-        condition: service_healthy
       redis:
         condition: service_healthy
     restart: unless-stopped
@@ -71,5 +56,4 @@ networks:
   jarvis-net:
     driver: bridge
 
-volumes:
-  ollama_data:
+

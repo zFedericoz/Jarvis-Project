@@ -112,8 +112,7 @@ class MultiAgent:
              language: str = "it", intent: str = "general") -> str:
         category = self._map_intent(intent)
         specialist = self._specialist_prompt(category, language)
-        return self.llm.chat_with_reflection(
+        return self.llm.chat(
             message, context, language,
             extra_system_prompt=specialist,
-            max_reflect_rounds=1,
         )
