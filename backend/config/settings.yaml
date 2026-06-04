@@ -15,17 +15,24 @@ llm:
 speech:
   stt:
     engine: faster-whisper
-    model: tiny
+    # tiny  = ~75MB, veloce, qualità bassa (sconsigliato per italiano)
+    # base  = ~150MB, buon bilanciamento ← consigliato su CPU
+    # small = ~500MB, ottimo per italiano
+    model: base          # era "tiny" → aggiornato a "base"
     device: cpu
     compute_type: int8
-    language: auto
+    language: auto       # auto = rilevamento automatico della lingua
+
   tts:
-    engine: edge-tts
-    voice_sample: models/voice/jarvis_sample.wav
+    # Ordine di priorità: kokoro → xtts (se voice sample presente) → edge-tts (cloud fallback)
+    engine: kokoro       # era "edge-tts" → aggiornato a "kokoro"
+    kokoro_speed: 1.0    # velocità voce: 0.8 = più lenta, 1.2 = più veloce
+    voice_sample: models/voice/jarvis_sample.wav   # opzionale: abilita XTTS voice cloning
     device: cpu
     fallback:
       engine: edge-tts
-      voice: it-IT-IsabellaNeural
+      voice: it-IT-IsabellaNeural   # usato solo se kokoro E xtts falliscono
+
   wake_word:
     engine: porcupine
     keyword: jarvis
@@ -74,3 +81,22 @@ server:
     - http://localhost:3000
     - http://localhost:80
     - http://localhost
+
+# =============================================================================
+# Step 3 — Briefing quotidiano
+# =============================================================================
+briefing:
+  enabled: true
+  hour: 8          # ora del briefing (formato 24h)
+  minute: 0
+  city: Bologna    # città per il meteo (wttr.in)
+  language: it
+
+# =============================================================================
+# Step 2 — RAG / Knowledge base
+# =============================================================================
+rag:
+  knowledge_folder: data/knowledge   # metti qui PDF, TXT, MD da indicizzare
+  watch_interval: 300                # secondi tra una scansione e l'altra (5 min)
+  chunk_size: 800
+  chunk_overlap: 100
