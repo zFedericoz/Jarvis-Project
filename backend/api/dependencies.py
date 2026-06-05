@@ -35,20 +35,23 @@ def get_brain(config):
         from brain.llm_client import LLMClient
         from brain.multiagent import MultiAgent
         from brain.intent_router import IntentRouter
+        # Passa la persistent memory al MultiAgent (Step 1-3)
+        _, persistent_memory = get_memory(config)
         llm = LLMClient(config)
-        _brain = (llm, IntentRouter(), MultiAgent(llm))
+        _brain = (llm, IntentRouter(), MultiAgent(llm, persistent_memory))
     return _brain
 
 def new_context():
     from brain.context_manager import ContextManager
-    return ContextManager()
+    _, persistent_memory = get_memory(config if (config := get_config()) else None)
+    return ContextManager(persistent_memory=persistent_memory)
 
 def get_speech(config):
     global _speech
     if _speech is None:
         from speech.stt import SpeechToText
         from speech.tts import TextToSpeech
-        _speech = (SpeechToText(config), TextToSpeech(config))
+        _speech = {"stt": SpeechToText(config), "tts": TextToSpeech(config)}
     return _speech
 
 def get_actions(config):
@@ -59,12 +62,17 @@ def get_actions(config):
         from actions.media_player import MediaPlayer
         from actions.productivity import Productivity
         from actions.vision import Vision
+        from actions.git_action import GitAction  # Step 4
+
+        llm, _, _ = get_brain(config)
+
         _actions = {
             "system_control": SystemControl(config),
             "web_search": WebSearch(config),
             "media_player": MediaPlayer(config),
             "productivity": Productivity(config),
             "vision": Vision(config),
+            "git": GitAction(config, llm),          # Step 4 — Git automation
         }
     return _actions
 

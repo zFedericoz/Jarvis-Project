@@ -50,7 +50,11 @@ def _get_temperature():
 
 def _get_top_processes(limit=5):
     procs = []
-    for p in sorted(psutil.process_iter(["pid", "name", "cpu_percent", "memory_percent"]), key=lambda p: p.info.get("cpu_percent", 0) or 0, reverse=True)[:limit]:
+    for p in sorted(
+        psutil.process_iter(["pid", "name", "cpu_percent", "memory_percent"]),
+        key=lambda p: p.info.get("cpu_percent", 0) or 0,
+        reverse=True,
+    )[:limit]:
         try:
             procs.append({
                 "pid": p.info["pid"],
@@ -102,6 +106,8 @@ def _push_log(level: str, message: str):
 
 router = APIRouter(prefix="/api")
 
+# ── Models ────────────────────────────────────────────────────────────────────
+
 class ChatRequest(BaseModel):
     text: str = ""
     file_content: str = ""
@@ -127,16 +133,23 @@ class FeedbackRequest(BaseModel):
     message_id: str = ""
     user_message: str
     assistant_response: str
-    rating: int  # 1 = thumbs down, 2 = thumbs up
+    rating: int
     language: str = "it"
     intent: str = "chat"
+
+class GitRequest(BaseModel):
+    command: str                       # es. "committa tutto", "status", "log"
+    repo_path: str | None = None       # percorso repo; None = usa default da settings.yaml
+
+
+# ── Standard routes ───────────────────────────────────────────────────────────
 
 @router.get("/status", response_model=StatusResponse)
 async def get_status():
     config = get_config()
     return StatusResponse(
         status="online",
-        version="2.0.0",
+        version="2.1.0",
         name="J.A.R.V.I.S.",
         llm=config["llm"]["model"],
     )
@@ -161,16 +174,6 @@ async def get_system_metrics():
 
 @router.get("/system/logs")
 async def get_system_logs():
-    try:
-        for p in psutil.process_iter(["name", "status"]):
-            try:
-                if p.info["status"] == "running":
-                    continue
-            except (psutil.NoSuchProcess, psutil.AccessDenied):
-                pass
-    except Exception:
-        pass
-
     cpu = psutil.cpu_percent(interval=0)
     ram = psutil.virtual_memory()
     if cpu > 85:
@@ -179,7 +182,6 @@ async def get_system_logs():
         _push_log("warning", f"RAM criticamente alta: {ram.percent}%")
     if cpu < 10:
         _push_log("info", f"Sistema in idle — CPU {cpu}%, RAM {ram.percent}%")
-
     return {"logs": list(_system_logs)}
 
 @router.websocket("/ws/wake")
@@ -193,13 +195,15 @@ async def websocket_wake(ws: WebSocket):
 async def websocket_audio(ws: WebSocket):
     await manager.connect(ws)
     config = get_config()
-    stt, tts = get_speech(config)
+    speech = get_speech(config)
     llm, intent_router, multiagent = get_brain(config)
     context = new_context()
     actions = get_actions(config)
     _, persistent_memory = get_memory(config)
-
-    await handle_audio_stream(ws, stt, multiagent, intent_router, context, actions, tts, persistent_memory)
+    await handle_audio_stream(
+        ws, speech["stt"], multiagent, intent_router,
+        context, actions, speech["tts"], persistent_memory
+    )
     manager.disconnect(ws)
 
 @router.post("/chat", response_model=ChatResponse)
@@ -217,7 +221,7 @@ async def chat_text(payload: ChatRequest, request: Request = None):
     llm, intent_router, multiagent = get_brain(config)
     context = new_context()
     actions = get_actions(config)
-    _, tts = get_speech(config)
+    speech = get_speech(config)
     _, persistent_memory = get_memory(config)
 
     if request and await request.is_disconnected():
@@ -225,11 +229,11 @@ async def chat_text(payload: ChatRequest, request: Request = None):
 
     lang = llm.detect_language(text)
     context.set_language(lang)
-
     original_query = text
+
     memories = persistent_memory.search(text, n_results=3)
     if memories:
-        memory_context = "\n".join(f"Related memory: {m}" for m in memories)
+        memory_context = "\n".join(f"Related memory: {m['text']}" for m in memories)
         prompt = f"{text}\n\n{memory_context}"
     else:
         prompt = text
@@ -238,10 +242,20 @@ async def chat_text(payload: ChatRequest, request: Request = None):
         return ChatResponse(response="Richiesta interrotta.", intent="none", language="it", audio=None)
 
     intent = intent_router.route(original_query)
-    if intent in actions:
+
+    # ── Step 4: Git action routing ────────────────────────────────────────────
+    if intent == "git":
+        repo_path = persistent_memory.get_preference("cartella_progetti")
+        response = await actions["git"].execute(original_query, repo_path=repo_path)
+        _push_log("info", f"Git: {original_query[:60]}")
+    elif intent in actions:
         response = await actions[intent].execute(original_query)
     else:
-        response = multiagent.chat(prompt, context.get_context(), language=lang, intent=intent, search_query=original_query)
+        response = multiagent.chat(
+            prompt, context.get_context(),
+            language=lang, intent=intent,
+            search_query=original_query,
+        )
 
     if request and await request.is_disconnected():
         return ChatResponse(response="Richiesta interrotta.", intent="none", language="it", audio=None)
@@ -252,27 +266,18 @@ async def chat_text(payload: ChatRequest, request: Request = None):
     persistent_memory.store(original_query, metadata={"role": "user", "intent": intent})
     persistent_memory.store(response, metadata={"role": "assistant", "intent": intent})
 
-    return ChatResponse(
-        response=response,
-        intent=intent,
-        language=lang,
-        audio=None,
-    )
+    return ChatResponse(response=response, intent=intent, language=lang, audio=None)
+
 
 @router.post("/upload", response_model=UploadResponse)
 async def upload_file(file: UploadFile = File(...)):
     content = await file.read()
     text_content = content.decode("utf-8", errors="replace")
-
     file_path = UPLOAD_DIR / file.filename
     with open(file_path, "wb") as f:
         f.write(content)
+    return UploadResponse(filename=file.filename, size=len(content), content=text_content)
 
-    return UploadResponse(
-        filename=file.filename,
-        size=len(content),
-        content=text_content,
-    )
 
 @router.post("/feedback")
 async def submit_feedback(fb: FeedbackRequest):
@@ -287,5 +292,110 @@ async def submit_feedback(fb: FeedbackRequest):
     }
     with open(FEEDBACK_FILE, "a", encoding="utf-8") as f:
         f.write(json.dumps(entry, ensure_ascii=False) + "\n")
-    logger.info(f"Feedback saved: rating={fb.rating}, lang={fb.language}, intent={fb.intent}")
+    logger.info(f"Feedback: rating={fb.rating}, lang={fb.language}, intent={fb.intent}")
     return {"status": "saved", "rating": fb.rating}
+
+
+# ── Step 4: Git API routes ────────────────────────────────────────────────────
+
+@router.post("/git/command")
+async def git_command(payload: GitRequest):
+    """
+    Esegue un comando Git via API REST.
+
+    Esempi:
+      POST /api/git/command
+      { "command": "committa tutto", "repo_path": "C:/Dev/JARVIS" }
+
+      POST /api/git/command
+      { "command": "status" }
+
+      POST /api/git/command
+      { "command": "ultimi 10 commit" }
+    """
+    config = get_config()
+    actions = get_actions(config)
+    git = actions.get("git")
+    if not git:
+        return {"status": "error", "message": "GitAction non disponibile"}
+
+    # Se il repo_path non è specificato, prova dalle preferenze utente
+    repo = payload.repo_path
+    if not repo:
+        _, persistent_memory = get_memory(config)
+        repo = persistent_memory.get_preference("cartella_progetti")
+
+    result = await git.execute(payload.command, repo_path=repo)
+    _push_log("info", f"Git API: {payload.command[:60]}")
+    return {"status": "ok", "result": result, "repo": str(repo or "default")}
+
+
+@router.get("/git/status")
+async def git_status(repo_path: str | None = None):
+    """Shortcut per git status."""
+    config = get_config()
+    actions = get_actions(config)
+    git = actions.get("git")
+    if not git:
+        return {"status": "error", "message": "GitAction non disponibile"}
+
+    if not repo_path:
+        _, mem = get_memory(config)
+        repo_path = mem.get_preference("cartella_progetti")
+
+    result = await git.execute("status", repo_path=repo_path)
+    return {"status": "ok", "result": result}
+
+
+@router.get("/git/log")
+async def git_log(repo_path: str | None = None, n: int = 10):
+    """Shortcut per git log con N commit."""
+    config = get_config()
+    actions = get_actions(config)
+    git = actions.get("git")
+    if not git:
+        return {"status": "error", "message": "GitAction non disponibile"}
+
+    if not repo_path:
+        _, mem = get_memory(config)
+        repo_path = mem.get_preference("cartella_progetti")
+
+    result = await git.execute(f"mostrami gli ultimi {n} commit", repo_path=repo_path)
+    return {"status": "ok", "result": result, "n": n}
+
+
+@router.post("/git/commit")
+async def git_commit(repo_path: str | None = None):
+    """
+    Esegue git add -A + commit con messaggio generato dall'LLM.
+    Shortcut per il frontend (pulsante "Commit" nella dashboard).
+    """
+    config = get_config()
+    actions = get_actions(config)
+    git = actions.get("git")
+    if not git:
+        return {"status": "error", "message": "GitAction non disponibile"}
+
+    if not repo_path:
+        _, mem = get_memory(config)
+        repo_path = mem.get_preference("cartella_progetti")
+
+    result = await git.execute("committa tutto", repo_path=repo_path)
+    return {"status": "ok", "result": result}
+
+
+@router.post("/git/push")
+async def git_push(repo_path: str | None = None):
+    """Esegue git push."""
+    config = get_config()
+    actions = get_actions(config)
+    git = actions.get("git")
+    if not git:
+        return {"status": "error", "message": "GitAction non disponibile"}
+
+    if not repo_path:
+        _, mem = get_memory(config)
+        repo_path = mem.get_preference("cartella_progetti")
+
+    result = await git.execute("push", repo_path=repo_path)
+    return {"status": "ok", "result": result}

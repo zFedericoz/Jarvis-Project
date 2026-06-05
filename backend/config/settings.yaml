@@ -100,3 +100,16 @@ rag:
   watch_interval: 300                # secondi tra una scansione e l'altra (5 min)
   chunk_size: 800
   chunk_overlap: 100
+
+# =============================================================================
+# Step 4 — Git automation
+# =============================================================================
+git:
+  # Repo di default se l'utente non specifica il percorso nella richiesta
+  # e non ha salvato "cartella_progetti" nelle preferenze persistenti.
+  # Puoi anche dire a JARVIS "la mia cartella progetti è C:/Dev/JARVIS"
+  # e lui la salverà automaticamente senza toccare questo file.
+  default_repo: "."
+
+  # Numero massimo di commit mostrati quando non specificato dall'utente
+  log_default_n: 5

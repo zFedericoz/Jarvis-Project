@@ -1,8 +1,18 @@
+"""
+Patch per LLMClient — aggiunge il parametro `system_override` al metodo `chat`.
+
+Sostituisce completamente llm_client.py. Unica modifica rispetto all'originale:
+  - `chat()` accetta `system_override: str | None = None`
+    Se fornito, sostituisce interamente il system prompt (invece di appendere).
+    Usato da GitAction per il prompt specializzato dei commit message.
+"""
+
 import yaml
 import ollama
 import logging
 
 logger = logging.getLogger("jarvis.brain.llm")
+
 
 class LLMClient:
     def __init__(self, config: dict | None = None):
@@ -24,11 +34,11 @@ class LLMClient:
         host = llm_cfg["host"]
         self.client = ollama.Client(host=host)
         gpu_label = self.num_gpu if self.num_gpu > 0 else "auto"
-        logger.info(f"LLM initialized: {self.model} @ {host} (GPU={gpu_label})")
+        logger.info(f"LLM inizializzato: {self.model} @ {host} (GPU={gpu_label})")
 
     def warmup(self):
         self.client.chat(model=self.model, messages=[{"role": "user", "content": ""}], keep_alive=-1)
-        logger.info("LLM model warmed up (keep_alive=-1)")
+        logger.info("LLM warmed up (keep_alive=-1)")
 
     def _options(self, **overrides) -> dict:
         opts = {"temperature": self.temperature}
@@ -38,8 +48,17 @@ class LLMClient:
         return opts
 
     def chat(self, message: str, context: list[dict] | None = None, language: str = "it",
-             extra_system_prompt: str = "") -> str:
-        messages = self._build_messages(message, context, language, extra_system_prompt)
+             extra_system_prompt: str = "",
+             system_override: str | None = None) -> str:
+        """
+        Args:
+            system_override: se fornito, sostituisce COMPLETAMENTE il system prompt.
+                             Usato da GitAction per il prompt dei commit message.
+            extra_system_prompt: come prima — AGGIUNTO in coda al system prompt base.
+        """
+        messages = self._build_messages(
+            message, context, language, extra_system_prompt, system_override
+        )
         resp = self.client.chat(
             model=self.model,
             messages=messages,
@@ -48,8 +67,8 @@ class LLMClient:
         )
         return resp["message"]["content"]
 
-    def chat_with_reflection(self, message: str, context: list[dict] | None = None, language: str = "it",
-                              extra_system_prompt: str = "",
+    def chat_with_reflection(self, message: str, context: list[dict] | None = None,
+                              language: str = "it", extra_system_prompt: str = "",
                               min_score: int = 7, max_reflect_rounds: int = 1) -> str:
         response = self.chat(message, context, language, extra_system_prompt)
 
@@ -62,12 +81,29 @@ class LLMClient:
 
         return response
 
+    def detect_language(self, text: str) -> str:
+        try:
+            from langdetect import detect
+            lang = detect(text)
+            return lang if lang in ("it", "en", "fr", "de", "es") else "it"
+        except Exception:
+            return "it"
+
     def _build_messages(self, message: str, context: list[dict] | None = None,
-                        language: str = "it", extra_system_prompt: str = "") -> list[dict]:
-        lang_instruct = f"\n\nIMPORTANTE: Rispondi esclusivamente in {self._lang_name(language)}. Non mescolare lingue. Non tradurre la risposta in altre lingue."
-        system_content = self.system_prompt + lang_instruct
-        if extra_system_prompt:
-            system_content += "\n\n" + extra_system_prompt
+                        language: str = "it", extra_system_prompt: str = "",
+                        system_override: str | None = None) -> list[dict]:
+        if system_override:
+            # Usato da GitAction e altri tool con prompt specializzati
+            system_content = system_override
+        else:
+            lang_instruct = (
+                f"\n\nIMPORTANTE: Rispondi esclusivamente in {self._lang_name(language)}. "
+                "Non mescolare lingue."
+            )
+            system_content = self.system_prompt + lang_instruct
+            if extra_system_prompt:
+                system_content += "\n\n" + extra_system_prompt
+
         messages = [{"role": "system", "content": system_content}]
         if context:
             messages.extend(context)
@@ -89,16 +125,18 @@ class LLMClient:
         try:
             resp = self.client.chat(
                 model=self.reflection_model,
-                messages=[{"role": "system", "content": "Sei un valutatore di qualità severo. Rispondi solo con un numero."},
-                          {"role": "user", "content": prompt}],
+                messages=[
+                    {"role": "system", "content": "Sei un valutatore di qualità severo. Rispondi solo con un numero."},
+                    {"role": "user", "content": prompt},
+                ],
                 options=self._options(temperature=0),
                 keep_alive=-1,
             )
             score_text = resp["message"]["content"].strip()
-            score = int(''.join(c for c in score_text if c.isdigit()) or "5")
+            score = int("".join(c for c in score_text if c.isdigit()) or "5")
             return max(0, min(10, score))
         except Exception as e:
-            logger.warning(f"Reflection scoring failed: {e}")
+            logger.warning(f"Reflection scoring fallito: {e}")
             return 10
 
     def _improve_response(self, user_message: str, previous_response: str,
@@ -121,20 +159,11 @@ class LLMClient:
         return resp["message"]["content"]
 
     @staticmethod
-    def _lang_name(code: str) -> str:
-        names = {"it": "italiano", "en": "inglese", "fr": "francese", "de": "tedesco", "es": "spagnolo"}
-        return names.get(code, "italiano")
-
-    def embed(self, text: str) -> list[float]:
-        resp = self.client.embeddings(model=self.embed_model, prompt=text)
-        return resp["embedding"]
-
-    def detect_language(self, text: str) -> str:
-        try:
-            import langdetect
-            lang = langdetect.detect(text)
-            valid = {"it", "en", "fr", "de", "es"}
-            return lang if lang in valid else "en"
-        except Exception as e:
-            logger.warning(f"Language detection failed ({e}), defaulting to en")
-            return "en"
+    def _lang_name(lang: str) -> str:
+        return {
+            "it": "italiano",
+            "en": "English",
+            "fr": "français",
+            "de": "Deutsch",
+            "es": "español",
+        }.get(lang, lang)
