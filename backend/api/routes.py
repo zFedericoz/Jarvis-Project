@@ -399,3 +399,73 @@ async def git_push(repo_path: str | None = None):
 
     result = await git.execute("push", repo_path=repo_path)
     return {"status": "ok", "result": result}
+
+# ══════════════════════════════════════════════════════════════════════════════
+# Step 5 — Terminal API routes
+# ══════════════════════════════════════════════════════════════════════════════
+
+class TerminalRequest(BaseModel):
+    command: str          # comando shell oppure frase in linguaggio naturale
+    cwd: str | None = None  # working directory; None = usa terminal.working_dir da config
+
+
+@router.post("/terminal/run")
+async def terminal_run(payload: TerminalRequest):
+    """
+    Esegue un comando nel terminale sicuro.
+
+    Esempi:
+      { "command": "ls -la" }
+      { "command": "che versione di Python ho?" }
+      { "command": "esegui python analisi.py", "cwd": "/app/scripts" }
+      { "command": "docker ps" }
+    """
+    config = get_config()
+    actions = get_actions(config)
+    terminal = actions.get("terminal")
+    if not terminal:
+        return {"status": "error", "message": "TerminalAction non disponibile"}
+
+    result = await terminal.execute(payload.command, cwd=payload.cwd)
+    _push_log("info", f"Terminal: {payload.command[:60]}")
+    return {
+        "status": "ok",
+        "command": payload.command,
+        "result": result,
+    }
+
+
+@router.get("/terminal/history")
+async def terminal_history():
+    """Ritorna lo storico dei comandi eseguiti (ultimi 50, più recenti prima)."""
+    config = get_config()
+    actions = get_actions(config)
+    terminal = actions.get("terminal")
+    if not terminal:
+        return {"status": "error", "message": "TerminalAction non disponibile"}
+
+    return {
+        "status": "ok",
+        "history": terminal.get_history(),
+    }
+
+
+@router.get("/terminal/allowed")
+async def terminal_allowed():
+    """
+    Ritorna la mappa dei comandi consentiti nelle categorie abilitate.
+    Utile per il frontend (mostrare all'utente cosa può fare).
+    """
+    config = get_config()
+    actions = get_actions(config)
+    terminal = actions.get("terminal")
+    if not terminal:
+        return {"status": "error", "message": "TerminalAction non disponibile"}
+
+    return {
+        "status": "ok",
+        "allowed": terminal.get_allowed_commands(),
+        "working_dir": str(terminal._working_dir),
+        "timeout": terminal._timeout,
+    }
+

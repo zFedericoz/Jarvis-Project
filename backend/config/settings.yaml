@@ -113,3 +113,34 @@ git:
 
   # Numero massimo di commit mostrati quando non specificato dall'utente
   log_default_n: 5
+
+# =============================================================================
+# Step 5 — Terminale sicuro
+# =============================================================================
+terminal:
+  enabled: true
+
+  # Cartella di lavoro di default per i comandi eseguiti
+  # Puoi anche dirlo a JARVIS: "la mia cartella progetti è C:/Dev/JARVIS"
+  working_dir: "."
+
+  # Timeout in secondi per ogni comando (dopo il quale viene killato)
+  timeout: 15
+
+  # Categorie di comandi abilitate.
+  # Valori possibili: info, filesystem, python, network_info, docker_info, git
+  #
+  # info         → ps, df, free, uname, whoami, env, date, uptime, tasklist
+  # filesystem   → ls, dir, find, cat, head, tail, pwd, tree, wc
+  # python       → python, python3, pip (solo install/list/show/freeze)
+  # network_info → ping, curl (solo GET), nslookup, dig, ipconfig, ip, netstat
+  # docker_info  → docker ps/images/logs/stats/inspect (sola lettura)
+  # git          → git status/log/diff/branch (fallback, GitAction ha priorità)
+  #
+  # ATTENZIONE: non aggiungere categorie non elencate sopra.
+  # Per comandi non previsti, usare direttamente il terminale del sistema.
+  allowed_categories:
+    - info
+    - filesystem
+    - python
+    - docker_info

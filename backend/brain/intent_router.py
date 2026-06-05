@@ -9,7 +9,7 @@ INTENTS = [
         r"\bbuongiorno\b", r"\bbuonasera\b", r"\bgood morning\b",
     ]),
 
-    # ── Step 4: Git automation ──────────────────────────────────────────────
+    # ── Step 4: Git ────────────────────────────────────────────────────────────
     ("git", [
         r"\b(commit|committa|fai il commit)\b",
         r"\b(git status|stato git|modifiche git)\b",
@@ -19,6 +19,26 @@ INTENTS = [
         r"\b(crea branch|nuovo branch|checkout branch)\b",
         r"\b(git stash|stash|salva temporaneamente)\b",
         r"\b(git diff|differenze git|cosa ho cambiato)\b",
+    ]),
+
+    # ── Step 5: Terminale sicuro ───────────────────────────────────────────────
+    # Nota: i pattern git sopra hanno priorità più alta, quindi "esegui git status"
+    # finisce in "git", non in "terminal". I comandi shell generici vanno qui.
+    ("terminal", [
+        r"\b(esegui|lancia|eseguire|run|execute|fai girare)\s+\w",
+        r"\b(versione di python|versione di pip|python --version)\b",
+        r"\b(processi attivi|lista processi|ps aux|tasklist)\b",
+        r"\b(uso del disco|spazio su disco|df -h)\b",
+        r"\b(uso della ram|memoria (libera|disponibile)|quanta ram)\b",
+        r"\b(ip (della macchina|locale)|indirizzo ip|ipconfig|ifconfig)\b",
+        r"\b(container docker|docker ps|immagini docker)\b",
+        r"\b(variabili d.ambiente|env|environment)\b",
+        r"\b(uptime|da quanto[  ]è acceso)\b",
+        r"\b(chi sono|utente corrente|whoami)\b",
+        r"\b(file in questa cartella|cosa c.è qui|ls -la|dir)\b",
+        r"\binstalla (la )?dip[en]+denza\b",
+        r"\binstalla il pacchetto\b",
+        r"\bpip install\b",
     ]),
 
     ("productivity", [
