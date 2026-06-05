@@ -469,3 +469,150 @@ async def terminal_allowed():
         "timeout": terminal._timeout,
     }
 
+# ══════════════════════════════════════════════════════════════════════════════
+# Step 6 — Focus Mode API routes
+# Aggiungere in fondo a backend/api/routes.py
+# ══════════════════════════════════════════════════════════════════════════════
+
+class FocusStartRequest(BaseModel):
+    duration_minutes: int | None = None   # None = usa il default da settings.yaml (25 min)
+
+class FocusSiteRequest(BaseModel):
+    site: str                             # es. "reddit.com"
+
+
+@router.post("/focus/start")
+async def focus_start(payload: FocusStartRequest = FocusStartRequest()):
+    """
+    Avvia una sessione Pomodoro.
+    Blocca i siti distraenti e attiva Focus Assist (Windows).
+
+    Esempio:
+      POST /api/focus/start
+      POST /api/focus/start  { "duration_minutes": 45 }
+    """
+    config = get_config()
+    actions = get_actions(config)
+    productivity = actions.get("productivity")
+    if not productivity:
+        return {"status": "error", "message": "Productivity action non disponibile"}
+
+    result = productivity.focus.start(work_minutes=payload.duration_minutes)
+    _push_log("info", f"Focus avviato: {payload.duration_minutes or 'default'} min")
+    return {"status": "ok", "result": result, "focus_status": productivity.focus.status()}
+
+
+@router.post("/focus/stop")
+async def focus_stop():
+    """Ferma la sessione focus e sblocca i siti."""
+    config = get_config()
+    actions = get_actions(config)
+    productivity = actions.get("productivity")
+    if not productivity:
+        return {"status": "error", "message": "Productivity action non disponibile"}
+
+    result = productivity.focus.stop()
+    _push_log("info", "Focus disattivato")
+    return {"status": "ok", "result": result}
+
+
+@router.post("/focus/pause")
+async def focus_pause():
+    """Mette in pausa il timer focus (sblocca i siti temporaneamente)."""
+    config = get_config()
+    actions = get_actions(config)
+    productivity = actions.get("productivity")
+    if not productivity:
+        return {"status": "error", "message": "Productivity action non disponibile"}
+
+    result = productivity.focus.pause()
+    return {"status": "ok", "result": result}
+
+
+@router.post("/focus/resume")
+async def focus_resume():
+    """Riprende una sessione focus in pausa."""
+    config = get_config()
+    actions = get_actions(config)
+    productivity = actions.get("productivity")
+    if not productivity:
+        return {"status": "error", "message": "Productivity action non disponibile"}
+
+    result = productivity.focus.resume()
+    return {"status": "ok", "result": result}
+
+
+@router.get("/focus/status")
+async def focus_status():
+    """
+    Ritorna lo stato corrente della sessione focus.
+
+    Response:
+      {
+        "state": "working" | "break" | "paused" | "idle",
+        "pomodoro_count": 3,
+        "remaining_seconds": 847,
+        "remaining_formatted": "14 min 7 sec",
+        "blocked_sites": ["reddit.com", ...],
+        "notifications_muted": true
+      }
+    """
+    config = get_config()
+    actions = get_actions(config)
+    productivity = actions.get("productivity")
+    if not productivity:
+        return {"status": "error", "message": "Productivity action non disponibile"}
+
+    return {"status": "ok", **productivity.focus.status()}
+
+
+@router.post("/focus/sites/add")
+async def focus_add_site(payload: FocusSiteRequest):
+    """
+    Aggiunge un sito alla blacklist focus (persistente tra sessioni).
+
+    Esempio:
+      POST /api/focus/sites/add  { "site": "reddit.com" }
+    """
+    config = get_config()
+    actions = get_actions(config)
+    productivity = actions.get("productivity")
+    if not productivity:
+        return {"status": "error", "message": "Productivity action non disponibile"}
+
+    result = productivity.focus.add_site(payload.site)
+    return {"status": "ok", "result": result, "blocked_sites": productivity.focus._blocked_sites}
+
+
+@router.post("/focus/sites/remove")
+async def focus_remove_site(payload: FocusSiteRequest):
+    """
+    Rimuove un sito dalla blacklist focus.
+
+    Esempio:
+      POST /api/focus/sites/remove  { "site": "youtube.com" }
+    """
+    config = get_config()
+    actions = get_actions(config)
+    productivity = actions.get("productivity")
+    if not productivity:
+        return {"status": "error", "message": "Productivity action non disponibile"}
+
+    result = productivity.focus.remove_site(payload.site)
+    return {"status": "ok", "result": result, "blocked_sites": productivity.focus._blocked_sites}
+
+
+@router.get("/focus/sites")
+async def focus_list_sites():
+    """Ritorna la lista dei siti bloccati durante il focus."""
+    config = get_config()
+    actions = get_actions(config)
+    productivity = actions.get("productivity")
+    if not productivity:
+        return {"status": "error", "message": "Productivity action non disponibile"}
+
+    return {
+        "status": "ok",
+        "blocked_sites": productivity.focus._blocked_sites,
+        "count": len(productivity.focus._blocked_sites),
+    }

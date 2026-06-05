@@ -22,8 +22,6 @@ INTENTS = [
     ]),
 
     # ── Step 5: Terminale sicuro ───────────────────────────────────────────────
-    # Nota: i pattern git sopra hanno priorità più alta, quindi "esegui git status"
-    # finisce in "git", non in "terminal". I comandi shell generici vanno qui.
     ("terminal", [
         r"\b(esegui|lancia|eseguire|run|execute|fai girare)\s+\w",
         r"\b(versione di python|versione di pip|python --version)\b",
@@ -41,10 +39,25 @@ INTENTS = [
         r"\bpip install\b",
     ]),
 
+    # ── Step 6: Focus / Productivity ──────────────────────────────────────────
     ("productivity", [
+        # Focus mode
+        r"\b(attiva|inizia|avvia|start)\s+(la\s+)?modalità\s+focus\b",
+        r"\b(inizia|avvia|start|fai)\s+(un\s+)?pomodoro\b",
+        r"\bpomodoro\s+(da\s+)?\d+\b",
+        r"\b(pausa|metti in pausa)\s+(il\s+)?(focus|pomodoro)\b",
+        r"\b(riprendi|continua)\s+(il\s+)?(focus|pomodoro)\b",
+        r"\b(disattiva|ferma|stop|termina)\s+(la\s+)?(modalità\s+)?focus\b",
+        r"\bquanto\s+(manca|resta|rimane)\b",
+        r"\b(stato|status)\s+(del\s+)?(focus|pomodoro)\b",
+        r"\b(aggiungi|rimuovi).+(blacklist\s+focus)\b",
+        r"\b(lista|elenco)\s+(dei\s+)?siti\s+(bloccati|focus)\b",
+        # Timer e promemoria
         r"\btimer\b", r"\bpromemoria\b", r"\bricorda\b", r"\ballarme\b",
         r"\bremind\b", r"\breminder\b", r"\balarm\b",
+        r"\bconto alla rovescia\b",
     ]),
+
     ("system_control", [
         r"\b(volume|spegn[i]|riavvia|blocca|schermo|processo|task|wifi|bluetooth)\b",
         r"\b(shutdown|restart|lock|screen|process|wifi|bluetooth)\b",

@@ -144,3 +144,26 @@ terminal:
     - filesystem
     - python
     - docker_info
+
+# =============================================================================
+# Step 6 — Modalità Focus
+# =============================================================================
+focus:
+  # Durata default di lavoro (minuti). Modificabile anche vocalmente:
+  # "JARVIS, pomodoro da 45 minuti"
+  work_minutes: 25
+
+  # Durata pausa breve (dopo ogni pomodoro)
+  break_minutes: 5
+
+  # Durata pausa lunga (ogni 4 pomodori)
+  long_break_minutes: 15
+
+  # Blocca i siti distraenti nel file hosts durante il focus.
+  # RICHIEDE che il container/processo giri con privilegi elevati (admin/root).
+  # Se disabilitato, il Pomodoro funziona comunque (solo timer + notifiche).
+  block_sites: true
+
+  # Attiva Focus Assist (Windows DND) durante il focus.
+  # Su Linux/Mac non ha effetto.
+  mute_notifications: true

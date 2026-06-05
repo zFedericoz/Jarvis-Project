@@ -3,6 +3,7 @@ import re
 import yaml
 from pathlib import Path
 
+
 def resolve_env(value):
     if isinstance(value, str):
         pattern = r'\$\{(\w+):-([^}]*)\}'
@@ -15,11 +16,13 @@ def resolve_env(value):
         return [resolve_env(v) for v in value]
     return value
 
-_config = None
-_brain = None
-_speech = None
+
+_config  = None
+_brain   = None
+_speech  = None
 _actions = None
-_memory = None
+_memory  = None
+
 
 def get_config():
     global _config
@@ -28,6 +31,7 @@ def get_config():
             raw = yaml.safe_load(f)
         _config = resolve_env(raw)
     return _config
+
 
 def get_brain(config):
     global _brain
@@ -40,11 +44,13 @@ def get_brain(config):
         _brain = (llm, IntentRouter(), MultiAgent(llm, persistent_memory))
     return _brain
 
+
 def new_context():
     from brain.context_manager import ContextManager
     config = get_config()
     _, persistent_memory = get_memory(config)
     return ContextManager(persistent_memory=persistent_memory)
+
 
 def get_speech(config):
     global _speech
@@ -54,6 +60,7 @@ def get_speech(config):
         _speech = {"stt": SpeechToText(config), "tts": TextToSpeech(config)}
     return _speech
 
+
 def get_actions(config):
     global _actions
     if _actions is None:
@@ -62,21 +69,29 @@ def get_actions(config):
         from actions.media_player import MediaPlayer
         from actions.productivity import Productivity
         from actions.vision import Vision
-        from actions.git_action import GitAction       # Step 4
-        from actions.terminal_action import TerminalAction  # Step 5
+        from actions.git_action import GitAction           # Step 4
+        from actions.terminal_action import TerminalAction # Step 5
 
         llm, _, _ = get_brain(config)
+        speech = get_speech(config)
+        _, persistent_memory = get_memory(config)
 
         _actions = {
             "system_control": SystemControl(config),
-            "web_search": WebSearch(config),
-            "media_player": MediaPlayer(config),
-            "productivity": Productivity(config),
-            "vision": Vision(config),
-            "git": GitAction(config, llm),             # Step 4
-            "terminal": TerminalAction(config, llm),   # Step 5
+            "web_search":      WebSearch(config),
+            "media_player":    MediaPlayer(config),
+            # Step 6: Productivity riceve TTS e memoria per FocusMode
+            "productivity":    Productivity(
+                                   config,
+                                   tts=speech["tts"],
+                                   persistent_memory=persistent_memory,
+                               ),
+            "vision":          Vision(config),
+            "git":             GitAction(config, llm),           # Step 4
+            "terminal":        TerminalAction(config, llm),      # Step 5
         }
     return _actions
+
 
 def get_memory(config):
     global _memory
