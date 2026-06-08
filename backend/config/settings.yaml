@@ -167,3 +167,20 @@ focus:
   # Attiva Focus Assist (Windows DND) durante il focus.
   # Su Linux/Mac non ha effetto.
   mute_notifications: true
+
+# =============================================================================
+# Step 7 — RPA / UI Automation
+# =============================================================================
+rpa:
+  # Secondi di animazione per i movimenti del mouse (0 = istantaneo)
+  move_duration: 0.3
+
+  # Failsafe: se il mouse raggiunge l'angolo in alto a sinistra, pyautogui
+  # lancia FailSafeException e blocca tutto. Tienilo true in dev.
+  failsafe: true
+
+  # Cartella dove vengono salvati gli screenshot
+  screenshots_dir: data/screenshots
+
+  # Qualità PNG degli screenshot (1-95)
+  screenshot_quality: 85

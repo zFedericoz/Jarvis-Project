@@ -69,8 +69,9 @@ def get_actions(config):
         from actions.media_player import MediaPlayer
         from actions.productivity import Productivity
         from actions.vision import Vision
-        from actions.git_action import GitAction           # Step 4
-        from actions.terminal_action import TerminalAction # Step 5
+        from actions.git_action import GitAction            # Step 4
+        from actions.terminal_action import TerminalAction  # Step 5
+        from actions.rpa_action import RPAAction            # Step 7
 
         llm, _, _ = get_brain(config)
         speech = get_speech(config)
@@ -80,15 +81,15 @@ def get_actions(config):
             "system_control": SystemControl(config),
             "web_search":      WebSearch(config),
             "media_player":    MediaPlayer(config),
-            # Step 6: Productivity riceve TTS e memoria per FocusMode
             "productivity":    Productivity(
                                    config,
                                    tts=speech["tts"],
                                    persistent_memory=persistent_memory,
                                ),
             "vision":          Vision(config),
-            "git":             GitAction(config, llm),           # Step 4
-            "terminal":        TerminalAction(config, llm),      # Step 5
+            "git":             GitAction(config, llm),
+            "terminal":        TerminalAction(config, llm),
+            "rpa":             RPAAction(config, llm),      # Step 7
         }
     return _actions
 

@@ -51,3 +51,8 @@ pyyaml>=6.0.1
 numpy>=1.26.0
 python-multipart>=0.0.9
 psutil>=5.9.0
+
+# RPA / UI Automation
+pyautogui>=0.9.54
+pillow>=10.0.0          # già richiesta da pyautogui, esplicitata
+pygetwindow>=0.0.9      # gestione finestre Windows (opzionale ma consigliato)
