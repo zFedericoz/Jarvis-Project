@@ -149,8 +149,7 @@ async def _warmup_all(config):
 
         # ── Step 3: Briefing service ──────────────────
         from services.briefing import BriefingService
-        from api.websocket_manager import WebSocketManager
-        ws_manager = WebSocketManager()
+        from api.websocket_manager import manager as ws_manager
         briefing = BriefingService(config, llm, speech["tts"], mem, ws_manager)
         briefing.start()
         app.state.briefing = briefing

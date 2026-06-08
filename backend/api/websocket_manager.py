@@ -90,14 +90,14 @@ async def handle_audio_stream(ws, stt, brain, router, context, actions, tts, per
                 if persistent_memory:
                     memories = persistent_memory.search(text, n_results=3)
                     if memories:
-                        memory_context = "\n".join(f"Related memory: {m}" for m in memories)
+                        memory_context = "\n".join(f"Related memory: {m['text']}" for m in memories)
                         enriched = f"{text}\n\n{memory_context}"
 
                 intent = router.route(enriched)
                 if intent in actions:
                     response = await actions[intent].execute(enriched)
                 else:
-                    response = brain.chat(enriched, context.get_context(), language=lang, intent=intent)
+                    response = brain.chat(enriched, context.get_context(), language=lang, intent=intent, search_query=enriched)
 
                 context.add_turn("assistant", response)
 

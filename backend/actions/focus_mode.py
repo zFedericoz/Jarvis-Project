@@ -273,8 +273,11 @@ class FocusMode:
             time.sleep(interval)
             elapsed += interval
 
-        if not self._timer_stop and self._state == FocusState.WORKING:
-            self._on_work_complete()
+        if not self._timer_stop:
+            if self._state == FocusState.WORKING:
+                self._on_work_complete()
+            elif self._state == FocusState.BREAK:
+                self._on_break_complete()
 
     def _on_work_complete(self):
         self._pomodoro_count_completed = getattr(self, "_pomodoro_count_completed", 0) + 1
