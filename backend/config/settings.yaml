@@ -8,7 +8,7 @@ llm:
   # reflection_model: qwen2.5:14b  # scommenta per usare un modello diverso per auto-valutazione
   embedding_model: mxbai-embed-large
   host: ${OLLAMA_HOST:-http://localhost:11434}
-  temperature: 0.3
+  temperature: 0.1
   context_window: 4096
   num_gpu: -1           # -1 = auto (usa GPU se disponibile), 0 = CPU, N = numero layers GPU
 

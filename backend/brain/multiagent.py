@@ -1,10 +1,20 @@
 """
-MultiAgent — orchestratore delle risposte di J.A.R.V.I.S.
+MultiAgent — orchestratore delle risposte di J.A.R.V.I.S.  (versione potenziata)
 
-Novità v2.1:
-  - Inietta automaticamente preferenze utente nel system prompt
-  - Cerca nella knowledge base RAG quando la domanda può beneficiarne
-  - Parametro `persistent_memory` opzionale (retrocompatibile)
+Sostituisce integralmente backend/brain/multiagent.py
+
+Miglioramenti rispetto alla versione originale:
+  1. RAG sempre attivo con soglia di rilevanza (distance threshold) invece di
+     pattern-matching fragile. Elimina il rischio di false negative.
+  2. Context budget: tronca RAG e web results a un numero massimo di token
+     stimato per non sforare il context_window di Qwen 2.5:14b (4096 token).
+  3. Formato RAG migliorato: ogni chunk include nome sorgente e indice chunk
+     così il modello può citare "[da: file.pdf §3]" con precisione.
+  4. Web search condizionale più precisa: evita ricerche inutili per domande
+     già coperte dal RAG o dalla memoria locale.
+  5. Reflection abilitata di default (max_reflect_rounds=1) per intent
+     "code" e "research" dove la qualità è prioritaria.
+  6. Logging strutturato per diagnosticare facilmente cosa viene iniettato.
 """
 
 import logging
@@ -13,130 +23,148 @@ from duckduckgo_search import DDGS
 
 logger = logging.getLogger("jarvis.brain.multiagent")
 
+# ─── Mapping intent → categoria specialista ────────────────────────────────
 INTENT_TO_SPECIALIST = {
     "system_control": "action",
-    "web_search": "research",
-    "media_player": "action",
-    "productivity": "action",
-    "vision": "action",
-    "greeting": "general",
-    "chat": "general",
-    "code": "code",
-    "creative": "creative",
-    "research": "research",
-    "action": "action",
-    "general": "general",
+    "web_search":     "research",
+    "media_player":   "action",
+    "productivity":   "action",
+    "vision":         "action",
+    "greeting":       "general",
+    "chat":           "general",
+    "code":           "code",
+    "creative":       "creative",
+    "research":       "research",
+    "action":         "action",
+    "general":        "general",
+    "git":            "code",
+    "terminal":       "action",
+    "rpa":            "action",
 }
 
+# ─── Prompt specialisti (italiano) ─────────────────────────────────────────
 SPECIALIST_PROMPTS_IT = {
     "code": """
-Sei uno specialista di codice. Segui queste regole:
-- Fornisci codice completo e funzionante, senza commenti placeholder
-- Includi type hints e docstring (PEP 257)
-- Spiega le decisioni di design in 1-2 frasi
-- Includi sempre un esempio d'uso
-- Formatta i blocchi di codice con il language tag corretto
+Sei uno specialista di codice. Regole:
+- Codice completo e funzionante, zero placeholder o commenti TODO.
+- Type hints e docstring PEP 257 sempre presenti.
+- Spiega le decisioni di design in 1-2 frasi dopo il blocco codice.
+- Includi sempre un esempio d'uso.
+- Language tag corretto in tutti i code block.
 """,
     "creative": """
-Sei uno scrittore creativo. Segui queste regole:
-- Sii vivido e coinvolgente nelle descrizioni
-- Usa metafore e analogie quando appropriate
-- Mantieni uno stile narrativo naturale e fluido
-- Evita il gergo tecnico se non richiesto
+Sei uno scrittore creativo. Regole:
+- Descrizioni vivide e coinvolgenti.
+- Usa metafore e analogie quando appropriate.
+- Stile narrativo naturale e fluido.
+- Evita il gergo tecnico se non richiesto.
 """,
     "research": """
-Sei un analista di ricerca. Segui queste regole:
-- Struttura le risposte in sezioni chiare quando necessario
-- Cita le fonti o spiega il ragionamento
-- Distingui tra fatti e speculazioni informate
-- Includi dati o statistiche rilevanti
-- Suggerisci domande di approfondimento
+Sei un analista di ricerca. Regole:
+- Struttura le risposte in sezioni chiare quando necessario.
+- Distingui tra fatti verificati e speculazioni informate.
+- Includi dati o statistiche rilevanti quando disponibili.
+- Se citi fonti dalla knowledge base, usa la notazione [da: nome_file].
 """,
     "action": """
-Sei un esecutore di azioni. Segui queste regole:
-- Conferma l'azione eseguita in una frase breve
-- Fornisci il risultato o lo stato dell'azione
-- Se l'azione fallisce, spiega perché e offri alternative
-- Sii minimale
+Sei un esecutore di azioni. Regole:
+- Conferma l'azione eseguita in una sola frase.
+- Fornisci il risultato o lo stato dell'azione.
+- Se l'azione fallisce, spiega perché e offri alternative.
+- Sii minimale: niente preamboli.
 """,
     "general": """
-Sei un assistente generale. Segui queste regole:
-- Sii utile e informativo
-- Adotta il tono dell'utente
-- Se non sei sicuro, fai domande di chiarimento
-- Fornisci esempi quando spieghi concetti
+Sei un assistente generale. Regole:
+- Sii utile e informativo.
+- Adotta il tono dell'utente, ma mantieni professionalità.
+- Fai domande di chiarimento solo se strettamente necessario.
+- Fornisci esempi concreti quando spieghi concetti astratti.
 """,
 }
 
+# ─── Prompt specialisti (inglese) ──────────────────────────────────────────
 SPECIALIST_PROMPTS_EN = {
     "code": """
-You are a code specialist. Follow these rules:
-- Provide complete, working code with no placeholder comments
-- Include type hints and docstrings (PEP 257)
-- Explain the key design decisions in 1-2 sentences
-- Always include a usage example
-- Format code blocks with the correct language tag
+You are a code specialist. Rules:
+- Complete, working code. No placeholder comments or TODOs.
+- Always include type hints and PEP 257 docstrings.
+- Explain key design decisions in 1-2 sentences after the code block.
+- Always include a usage example.
+- Use the correct language tag in all code blocks.
 """,
     "creative": """
-You are a creative writer. Follow these rules:
-- Be vivid and engaging in your descriptions
-- Use metaphors and analogies when appropriate
-- Keep a natural, flowing narrative style
-- Avoid technical jargon unless requested
+You are a creative writer. Rules:
+- Vivid and engaging descriptions.
+- Use metaphors and analogies when appropriate.
+- Natural, flowing narrative style.
+- Avoid technical jargon unless requested.
 """,
     "research": """
-You are a research analyst. Follow these rules:
-- Structure answers with clear sections when appropriate
-- Cite sources or explain reasoning
-- Distinguish between facts and informed speculation
-- Include relevant data points or statistics
-- Suggest follow-up questions for deeper exploration
+You are a research analyst. Rules:
+- Structure answers with clear sections when appropriate.
+- Distinguish between verified facts and informed speculation.
+- Include relevant data points or statistics when available.
+- When citing knowledge-base sources, use the [from: filename] notation.
 """,
     "action": """
-You are an action executor. Follow these rules:
-- Confirm the action taken in one brief sentence
-- Provide the result or status of the action
-- If the action failed, explain why and offer alternatives
-- Keep it minimal
+You are an action executor. Rules:
+- Confirm the action taken in a single sentence.
+- Provide the result or status of the action.
+- If the action failed, explain why and offer alternatives.
+- No preambles.
 """,
     "general": """
-You are a general assistant. Follow these rules:
-- Be helpful and informative
-- Match the user's tone
-- If unsure, ask clarifying questions
-- Provide examples when explaining concepts
+You are a general assistant. Rules:
+- Be helpful and informative.
+- Match the user's tone while keeping professionalism.
+- Ask clarifying questions only when strictly necessary.
+- Provide concrete examples when explaining abstract concepts.
 """,
 }
 
+# ─── Pattern per web search ─────────────────────────────────────────────────
 NEED_SEARCH_PATTERNS = [
     r"\b(notizie|ultime|news|breaking|aggiornament)\b",
     r"\b(meteo|tempo|che tempo|previsioni)\b",
     r"\b(classifica|risultato|punteggio|partita)\b",
-    r"\b(cos.è|chi è|che cos.è|che cosa.sono)\b",
     r"\b(prezzo|quanto costa|quanto costano)\b",
     r"\b(elezion|presidente|governo|ministro|politic)\b",
-    r"\b(ultimo|ultima|recente|nuovo|nuova)\s+\w{2,}",
+    r"\b(ultimo|ultima|recente|nuovo|nuova)\s+\w{3,}",
+    r"\b(today|latest|current|now|breaking)\b",
 ]
 
-# Pattern che suggeriscono una ricerca in RAG
-NEED_RAG_PATTERNS = [
-    r"\b(nel documento|nel pdf|nel file|nel manuale)\b",
-    r"\b(hai indicizzato|hai letto|cosa dice)\b",
-    r"\b(ricerca nei tuoi doc|cerca nei documenti)\b",
-    r"\b(secondo il|stando al|come da)\b",
-    r"\b(ricordati|ti avevo detto|avevo scritto)\b",
-]
+# ─── Costanti per il budget del contesto ───────────────────────────────────
+# Stima conservativa: 1 token ≈ 4 caratteri.
+# Context window Qwen 2.5:14b = 4096 token → ~16 384 caratteri.
+# Riserviamo ~2500 token per system prompt + risposta → budget extra ~1500 token.
+_CHARS_PER_TOKEN = 4
+_RAG_TOKEN_BUDGET = 1200     # token massimi da dedicare al RAG
+_WEB_TOKEN_BUDGET = 600      # token massimi per i risultati web
+_RAG_CHAR_BUDGET  = _RAG_TOKEN_BUDGET * _CHARS_PER_TOKEN
+_WEB_CHAR_BUDGET  = _WEB_TOKEN_BUDGET * _CHARS_PER_TOKEN
+
+# Soglia di distanza ChromaDB sotto la quale un chunk è considerato rilevante.
+# ChromaDB usa distanza coseno: 0.0 = identico, 2.0 = opposto.
+# Valori < 1.2 sono generalmente buoni; abbassa a 0.9 per maggiore precisione.
+_RAG_DISTANCE_THRESHOLD = 1.2
+
+# Intent che beneficiano della reflection (qualità > velocità)
+_REFLECTION_INTENTS = {"code", "research", "creative"}
 
 
 class MultiAgent:
     def __init__(self, llm_client, persistent_memory=None):
         """
         Args:
-            llm_client: istanza LLMClient
+            llm_client:        istanza LLMClient
             persistent_memory: istanza PersistentMemory (opzionale)
         """
-        self.llm = llm_client
+        self.llm  = llm_client
         self._mem = persistent_memory
+
+    # ──────────────────────────────────────────────────────────────────────────
+    # Mapping e selezione specialista
+    # ──────────────────────────────────────────────────────────────────────────
 
     def _map_intent(self, intent: str) -> str:
         return INTENT_TO_SPECIALIST.get(intent, "general")
@@ -145,79 +173,170 @@ class MultiAgent:
         prompts = SPECIALIST_PROMPTS_IT if language == "it" else SPECIALIST_PROMPTS_EN
         return prompts.get(category, prompts["general"])
 
+    # ──────────────────────────────────────────────────────────────────────────
+    # RAG: ricerca nella knowledge base con soglia di rilevanza
+    # ──────────────────────────────────────────────────────────────────────────
+
+    def _search_rag(self, query: str) -> str:
+        """
+        Cerca nella knowledge base.
+        Filtra i chunk con distanza coseno > _RAG_DISTANCE_THRESHOLD per
+        evitare di iniettare contenuto non pertinente nel prompt.
+        Tronca il risultato al budget di caratteri configurato.
+        """
+        if not self._mem:
+            return ""
+
+        count = self._mem.knowledge.count()
+        if count == 0:
+            return ""
+
+        n_results = min(6, count)  # recupera più chunk, poi filtra
+        try:
+            raw = self._mem.knowledge.query(
+                query_texts=[query],
+                n_results=n_results,
+                include=["documents", "metadatas", "distances"],
+            )
+        except Exception as e:
+            logger.warning(f"RAG query fallita: {e}")
+            return ""
+
+        docs      = raw.get("documents",  [[]])[0]
+        metas     = raw.get("metadatas",  [[]])[0]
+        distances = raw.get("distances",  [[]])[0]
+
+        if not docs:
+            return ""
+
+        # Filtra per rilevanza
+        relevant = [
+            (doc, meta, dist)
+            for doc, meta, dist in zip(docs, metas, distances)
+            if dist <= _RAG_DISTANCE_THRESHOLD
+        ]
+
+        if not relevant:
+            logger.info(f"RAG: nessun chunk rilevante (threshold={_RAG_DISTANCE_THRESHOLD}) per '{query[:60]}'")
+            return ""
+
+        logger.info(f"RAG: {len(relevant)}/{n_results} chunk rilevanti per '{query[:60]}'")
+
+        # Formatta con fonte e indice chunk per facilitare la citazione
+        lines = ["# Documenti rilevanti dalla knowledge base"]
+        total_chars = len(lines[0])
+
+        for doc, meta, dist in relevant:
+            source      = meta.get("source", "sconosciuto")
+            chunk_index = meta.get("chunk_index", "?")
+            header      = f"\n[da: {source} §{chunk_index}] (rilevanza: {1 - dist / 2:.0%})"
+            entry       = f"{header}\n{doc}"
+
+            if total_chars + len(entry) > _RAG_CHAR_BUDGET:
+                logger.info("RAG: budget caratteri raggiunto, chunk successivi scartati")
+                break
+
+            lines.append(entry)
+            total_chars += len(entry)
+
+        return "\n".join(lines)
+
+    # ──────────────────────────────────────────────────────────────────────────
+    # Web search
+    # ──────────────────────────────────────────────────────────────────────────
+
     def _needs_web_search(self, message: str) -> bool:
         return any(re.search(p, message.lower()) for p in NEED_SEARCH_PATTERNS)
 
-    def _needs_rag(self, message: str) -> bool:
-        return any(re.search(p, message.lower()) for p in NEED_RAG_PATTERNS)
-
-    def _search_web(self, query: str, max_results: int = 3) -> str:
+    def _search_web(self, query: str, max_results: int = 4) -> str:
+        """Esegue una ricerca DuckDuckGo e ritorna i risultati troncati al budget."""
         try:
             with DDGS() as ddgs:
                 results = list(ddgs.text(query, max_results=max_results))
             if not results:
                 return ""
-            lines = [f"- {r.get('title', '')}: {r.get('body', '')[:200]}" for r in results]
+
+            lines = []
+            total = 0
+            for r in results:
+                snippet = f"- {r.get('title', '')}: {r.get('body', '')[:300]}"
+                if total + len(snippet) > _WEB_CHAR_BUDGET:
+                    break
+                lines.append(snippet)
+                total += len(snippet)
+
             return "\n".join(lines)
         except Exception as e:
             logger.warning(f"Web search fallita: {e}")
             return ""
 
-    def _search_rag(self, query: str) -> str:
-        if not self._mem:
-            return ""
-        results = self._mem.search_knowledge(query, n_results=4)
-        if not results:
-            return ""
-        lines = ["Documenti rilevanti dalla knowledge base:"]
-        for r in results:
-            source = r["metadata"].get("source", "?")
-            lines.append(f"[{source}] {r['text']}")
-        logger.info(f"RAG: {len(results)} chunk trovati per '{query[:50]}'")
-        return "\n".join(lines)
+    # ──────────────────────────────────────────────────────────────────────────
+    # Contesto utente da memoria persistente
+    # ──────────────────────────────────────────────────────────────────────────
 
     def _user_context(self) -> str:
-        """Inietta le preferenze utente nel prompt solo se disponibili."""
         if not self._mem:
             return ""
-        return self._mem.build_user_context_string()
+        ctx = self._mem.build_user_context_string()
+        return ctx
 
-    def chat(self, message: str, context: list[dict] | None = None,
-             language: str = "it", intent: str = "general",
-             search_query: str | None = None) -> str:
+    # ──────────────────────────────────────────────────────────────────────────
+    # Entry point principale
+    # ──────────────────────────────────────────────────────────────────────────
 
-        category = self._map_intent(intent)
+    def chat(
+        self,
+        message: str,
+        context: list[dict] | None = None,
+        language: str = "it",
+        intent: str = "general",
+        search_query: str | None = None,
+    ) -> str:
+
+        category   = self._map_intent(intent)
         specialist = self._specialist_prompt(category, language)
-
-        extra_parts = []
-        query = search_query or message
+        query      = search_query or message
+        extra_parts: list[str] = []
 
         # 1. Contesto utente (preferenze persistenti)
         user_ctx = self._user_context()
         if user_ctx:
             extra_parts.append(user_ctx)
+            logger.debug("Contesto utente iniettato nel prompt")
 
-        # 2. RAG: cerca nella knowledge base se rilevante
-        if self._needs_rag(query) or (self._mem and self._mem.knowledge.count() > 0):
-            rag_ctx = self._search_rag(query)
-            if rag_ctx:
-                extra_parts.append(rag_ctx)
+        # 2. RAG — sempre attivo, filtrato per rilevanza
+        rag_ctx = self._search_rag(query)
+        if rag_ctx:
+            extra_parts.append(rag_ctx)
 
-        # 3. Web search: cerca online se la domanda lo richiede
-        if self._needs_web_search(query):
+        # 3. Web search — solo se necessario E il RAG non copre già la domanda
+        #    (evitiamo ricerche web ridondanti se la knowledge base risponde)
+        rag_already_covers = bool(rag_ctx)
+        if self._needs_web_search(query) and not rag_already_covers:
             logger.info(f"Web search attivata per: {query[:80]}")
             web_results = self._search_web(query)
             if web_results:
                 extra_parts.append(
-                    f"Risultati web (usa solo se pertinenti, ignora altrimenti):\n{web_results}"
+                    "Risultati web (usa solo se pertinenti, ignora altrimenti):\n"
+                    + web_results
                 )
 
+        # Componi il prompt specialista finale
         full_specialist = specialist
         if extra_parts:
             full_specialist = specialist + "\n\n" + "\n\n".join(extra_parts)
 
-        return self.llm.chat_with_reflection(
-            message, context, language,
-            extra_system_prompt=full_specialist,
-            min_score=7, max_reflect_rounds=0,
-        )
+        # 4. Reflection attiva per intent che richiedono alta qualità
+        use_reflection = intent in _REFLECTION_INTENTS
+        if use_reflection:
+            logger.debug(f"Reflection abilitata per intent='{intent}'")
+            return self.llm.chat_with_reflection(
+                message, context, language,
+                extra_system_prompt=full_specialist,
+                min_score=7, max_reflect_rounds=1,
+            )
+        else:
+            return self.llm.chat(
+                message, context, language,
+                extra_system_prompt=full_specialist,
+            )
