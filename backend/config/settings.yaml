@@ -4,7 +4,8 @@
 
 llm:
   provider: ollama
-  model: qwen2.5:14b
+  model: qwen3:8b # commentare se si vuole utilizzare un modello più avanzato
+  # model: qwen3:30b-a3b # scommentare per utilizzare un modello più avanzato (richiede ~8-10 GB di VRAM con GPU dedicata) - su terminale -> ollama pull qwen3:30b-a3b
   # reflection_model: qwen2.5:14b  # scommenta per usare un modello diverso per auto-valutazione
   embedding_model: mxbai-embed-large
   host: ${OLLAMA_HOST:-http://localhost:11434}
