@@ -13,7 +13,7 @@ from pathlib import Path
 
 import psutil
 
-from .dependencies import get_config, get_brain, get_speech, get_actions, get_memory, new_context
+from .dependencies import get_config, get_brain, get_speech, get_actions, get_memory, new_context, get_chat_manager
 from .websocket_manager import manager, handle_wake_word, handle_audio_stream
 
 logger = logging.getLogger("jarvis.api.routes")
@@ -112,12 +112,14 @@ router = APIRouter(prefix="/api")
 class ChatRequest(BaseModel):
     text: str = ""
     file_content: str = ""
+    session_id: int | None = None
 
 class ChatResponse(BaseModel):
     response: str
     intent: str
     language: str
     audio: str | None = None
+    session_id: int | None = None
 
 class StatusResponse(BaseModel):
     status: str
@@ -212,12 +214,26 @@ async def chat_text(payload: ChatRequest, request: Request = None):
     config = get_config()
     text = payload.text.strip()
     file_content = payload.file_content
+    session_id = payload.session_id
 
     if not text and not file_content:
-        return ChatResponse(response="No input provided.", intent="none", language="it", audio=None)
+        return ChatResponse(response="No input provided.", intent="none", language="it", audio=None, session_id=session_id)
 
     if file_content:
         text = f"{text}\n\n[File content]:\n{file_content}" if text else f"[File content]:\n{file_content}"
+
+    # ── Chat session handling ────────────────────────────────────────────────
+    chat_mgr = get_chat_manager()
+    if session_id is not None:
+        existing = chat_mgr.get_session(session_id)
+        if not existing:
+            session_id = None
+
+    if session_id is None:
+        session = chat_mgr.create_session()
+        session_id = session["id"]
+
+    chat_mgr.add_message(session_id, "user", payload.text.strip() or "[file]", "")
 
     llm, intent_router, multiagent = get_brain(config)
     context = new_context()
@@ -226,7 +242,7 @@ async def chat_text(payload: ChatRequest, request: Request = None):
     _, persistent_memory = get_memory(config)
 
     if request and await request.is_disconnected():
-        return ChatResponse(response="Richiesta interrotta.", intent="none", language="it", audio=None)
+        return ChatResponse(response="Richiesta interrotta.", intent="none", language="it", audio=None, session_id=session_id)
 
     lang = llm.detect_language(text)
     context.set_language(lang)
@@ -240,11 +256,10 @@ async def chat_text(payload: ChatRequest, request: Request = None):
         prompt = text
 
     if request and await request.is_disconnected():
-        return ChatResponse(response="Richiesta interrotta.", intent="none", language="it", audio=None)
+        return ChatResponse(response="Richiesta interrotta.", intent="none", language="it", audio=None, session_id=session_id)
 
     intent = intent_router.route(original_query)
 
-    # ── Step 4: Git action routing ────────────────────────────────────────────
     if intent == "git":
         repo_path = persistent_memory.get_preference("cartella_progetti")
         response = await actions["git"].execute(original_query, repo_path=repo_path)
@@ -259,7 +274,7 @@ async def chat_text(payload: ChatRequest, request: Request = None):
         )
 
     if request and await request.is_disconnected():
-        return ChatResponse(response="Richiesta interrotta.", intent="none", language="it", audio=None)
+        return ChatResponse(response="Richiesta interrotta.", intent="none", language="it", audio=None, session_id=session_id)
 
     context.add_turn("user", original_query)
     context.add_turn("assistant", response)
@@ -267,7 +282,10 @@ async def chat_text(payload: ChatRequest, request: Request = None):
     persistent_memory.store(original_query, metadata={"role": "user", "intent": intent})
     persistent_memory.store(response, metadata={"role": "assistant", "intent": intent})
 
-    return ChatResponse(response=response, intent=intent, language=lang, audio=None)
+    chat_mgr.add_message(session_id, "assistant", response, intent)
+    chat_mgr.auto_title(session_id)
+
+    return ChatResponse(response=response, intent=intent, language=lang, audio=None, session_id=session_id)
 
 
 @router.post("/upload", response_model=UploadResponse)
@@ -891,3 +909,45 @@ async def rpa_command(payload: RPACommandRequest):
     result = await rpa.execute(payload.command)
     _push_log("info", f"RPA command: {payload.command[:60]}")
     return {"status": "ok", "result": result}
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# Step 8 — Chat Session routes
+# ══════════════════════════════════════════════════════════════════════════════
+
+class RenameSessionRequest(BaseModel):
+    title: str
+
+
+@router.get("/chats")
+async def list_chat_sessions():
+    chat_mgr = get_chat_manager()
+    return {"sessions": chat_mgr.list_sessions()}
+
+
+@router.post("/chats")
+async def create_chat_session():
+    chat_mgr = get_chat_manager()
+    session = chat_mgr.create_session()
+    return {"session": session}
+
+
+@router.delete("/chats/{session_id}")
+async def delete_chat_session(session_id: int):
+    chat_mgr = get_chat_manager()
+    ok = chat_mgr.delete_session(session_id)
+    return {"status": "deleted" if ok else "not_found"}
+
+
+@router.patch("/chats/{session_id}")
+async def rename_chat_session(session_id: int, payload: RenameSessionRequest):
+    chat_mgr = get_chat_manager()
+    ok = chat_mgr.rename_session(session_id, payload.title)
+    return {"status": "renamed" if ok else "not_found"}
+
+
+@router.get("/chats/{session_id}/messages")
+async def get_chat_messages(session_id: int):
+    chat_mgr = get_chat_manager()
+    messages = chat_mgr.get_messages(session_id)
+    return {"messages": messages}

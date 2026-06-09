@@ -17,11 +17,12 @@ def resolve_env(value):
     return value
 
 
-_config  = None
-_brain   = None
-_speech  = None
-_actions = None
-_memory  = None
+_config        = None
+_brain         = None
+_speech        = None
+_actions       = None
+_memory        = None
+_chat_manager  = None
 
 
 def get_config():
@@ -101,3 +102,11 @@ def get_memory(config):
         from memory.persistent import PersistentMemory
         _memory = (EphemeralMemory(config), PersistentMemory(config))
     return _memory
+
+
+def get_chat_manager():
+    global _chat_manager
+    if _chat_manager is None:
+        from chat.chat_manager import ChatManager
+        _chat_manager = ChatManager()
+    return _chat_manager

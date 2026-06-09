@@ -13,11 +13,11 @@ $root = Split-Path -Parent $PSScriptRoot
 Write-Host "=== J.A.R.V.I.S. Docker Launcher ===" -ForegroundColor Cyan
 Write-Host ""
 
-# ── 1. Start Host Metrics Server ──────────────────────────────────────────────
-Write-Host "[1/3] Avvio Host Metrics Server..." -ForegroundColor Yellow
-
 $pythonPath = (Get-Command python).Source
 Write-Host "  Python: $pythonPath" -ForegroundColor Gray
+
+# ── 1. Start Host Metrics Server ──────────────────────────────────────────────
+Write-Host "[1/4] Avvio Host Metrics Server..." -ForegroundColor Yellow
 
 $metricsJob = Start-Job -Name "HostMetrics" -ScriptBlock {
     param($py, $dir)
@@ -37,8 +37,29 @@ if ($ms.State -eq 'Running') {
     $metricsJob = $null
 }
 
-# ── 2. Start Docker containers ────────────────────────────────────────────────
-Write-Host "[2/3] Avvio container Docker..." -ForegroundColor Yellow
+# ── 2. Start Host RPA Server ──────────────────────────────────────────────────
+Write-Host "[2/4] Avvio Host RPA Server..." -ForegroundColor Yellow
+
+$rpaJob = Start-Job -Name "HostRPA" -ScriptBlock {
+    param($py, $dir)
+    Set-Location $dir
+    & $py host_rpa_server.py
+} -ArgumentList $pythonPath, (Join-Path $root "backend")
+
+Start-Sleep -Seconds 2
+$rpa = Get-Job -Name "HostRPA" -ErrorAction SilentlyContinue
+
+if ($rpa.State -eq 'Running') {
+    Write-Host "  OK - http://localhost:18766" -ForegroundColor Green
+} else {
+    Write-Host "  ERRORE:" -ForegroundColor Red
+    $rpa | Receive-Job -ErrorAction SilentlyContinue | ForEach-Object { Write-Host "    $_" -ForegroundColor Red }
+    $rpa | Remove-Job -Force -ErrorAction SilentlyContinue
+    $rpaJob = $null
+}
+
+# ── 3. Start Docker containers ────────────────────────────────────────────────
+Write-Host "[3/4] Avvio container Docker..." -ForegroundColor Yellow
 Write-Host "  docker compose up -d --build" -ForegroundColor Gray
 Write-Host ""
 
@@ -54,6 +75,9 @@ try {
         if ($metricsJob) {
             Write-Host "  Metrics:  http://localhost:18765 (metriche reali)" -ForegroundColor Cyan
         }
+        if ($rpaJob) {
+            Write-Host "  RPA:      http://localhost:18766 (automazione UI)" -ForegroundColor Cyan
+        }
         Write-Host ""
         Write-Host "Premi Ctrl+C per fermare i container." -ForegroundColor Cyan
         docker compose logs -f
@@ -61,14 +85,22 @@ try {
 } catch {
     Write-Host "Errore Docker: $_" -ForegroundColor Red
 } finally {
-    # ── 3. Cleanup ────────────────────────────────────────────────────────────
+    # ── 4. Cleanup ────────────────────────────────────────────────────────────
     Write-Host ""
-    Write-Host "[3/3] Pulizia..." -ForegroundColor Yellow
+    Write-Host "[4/4] Pulizia..." -ForegroundColor Yellow
     if ($metricsJob) {
         Write-Host "  Fermo Host Metrics Server..." -ForegroundColor Yellow
         Stop-Job -Name "HostMetrics" -ErrorAction SilentlyContinue
         Remove-Job -Name "HostMetrics" -Force -ErrorAction SilentlyContinue
     }
+    if ($rpaJob) {
+        Write-Host "  Fermo Host RPA Server..." -ForegroundColor Yellow
+        Stop-Job -Name "HostRPA" -ErrorAction SilentlyContinue
+        Remove-Job -Name "HostRPA" -Force -ErrorAction SilentlyContinue
+    }
+    Write-Host "  Fermo container Docker..." -ForegroundColor Yellow
+    Set-Location $root
+    docker compose down
     Write-Host "  Fatto." -ForegroundColor Green
 }
 

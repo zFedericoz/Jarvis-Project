@@ -41,6 +41,11 @@ async def handle_wake_word(ws: WebSocket, config: dict):
         model_path=ww_config.get("model_path", ""),
     )
 
+    if processor is None:
+        logger.warning("Wake word non disponibile — chiusura connessione")
+        await ws.send_json({"type": "error", "message": "Wake word non disponibile"})
+        return
+
     frame_size = processor.frame_length
     buffer = bytearray()
 

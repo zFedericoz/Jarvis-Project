@@ -184,3 +184,7 @@ rpa:
 
   # Qualità PNG degli screenshot (1-95)
   screenshot_quality: 85
+
+  # Proxy URL per RPA su host Windows (quando backend è in Docker).
+  # Attivalo lanciando host_rpa_server.py su Windows, poi scommenta:
+  # host_proxy_url: "http://host.docker.internal:18766"

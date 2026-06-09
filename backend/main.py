@@ -5,7 +5,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 import uvicorn
 
-from api.dependencies import resolve_env, get_config, get_brain, get_speech, get_actions, get_memory
+from api.dependencies import resolve_env, get_config, get_brain, get_speech, get_actions, get_memory, get_chat_manager
 from api.routes import router
 
 logging.basicConfig(
@@ -115,6 +115,13 @@ async def startup():
     logger.info(f"  Vision : {'enabled' if config['vision']['enabled'] else 'disabled'}")
     logger.info("=" * 50)
 
+    # ── Chat DB init ───────────────────────────
+    try:
+        get_chat_manager()
+        logger.info("  Chat database pronto")
+    except Exception as e:
+        logger.warning(f"  Chat DB init fallito: {e}")
+
     asyncio.create_task(_warmup_all(config))
 
 
@@ -124,13 +131,13 @@ async def _warmup_all(config):
         llm, _, _ = get_brain(config)
         speech = get_speech(config)
         get_actions(config)
-        mem, _ = get_memory(config)
+        _, persistent_mem = get_memory(config)
 
         # ── Step 1: Memoria persistente ──────────────
-        user_name = mem.get_preference("nome_utente")
+        user_name = persistent_mem.get_preference("nome_utente")
         if user_name:
             logger.info(f"  Utente riconosciuto: {user_name}")
-        prefs_count = len(mem.get_all_preferences())
+        prefs_count = len(persistent_mem.get_all_preferences())
         logger.info(f"  Preferenze caricate: {prefs_count}")
 
         # ── Step 2: RAG watcher ───────────────────────
@@ -138,7 +145,7 @@ async def _warmup_all(config):
         from memory.rag_indexer import RAGIndexer
         knowledge_folder = "data/knowledge"
         os.makedirs(knowledge_folder, exist_ok=True)
-        indexer = RAGIndexer(mem)
+        indexer = RAGIndexer(persistent_mem)
         # Indicizza i file esistenti all'avvio
         existing = indexer.index_folder(knowledge_folder)
         if existing:
@@ -150,7 +157,7 @@ async def _warmup_all(config):
         # ── Step 3: Briefing service ──────────────────
         from services.briefing import BriefingService
         from api.websocket_manager import manager as ws_manager
-        briefing = BriefingService(config, llm, speech["tts"], mem, ws_manager)
+        briefing = BriefingService(config, llm, speech["tts"], persistent_mem, ws_manager)
         briefing.start()
         app.state.briefing = briefing
 

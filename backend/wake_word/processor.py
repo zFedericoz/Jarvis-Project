@@ -1,4 +1,3 @@
-import pvporcupine
 import numpy as np
 import logging
 from pathlib import Path
@@ -9,8 +8,17 @@ _processor_instance = None
 _processor_keyword = None
 _processor_sensitivity = None
 
+try:
+    import pvporcupine
+    _HAS_PORCUPINE = True
+except ImportError:
+    _HAS_PORCUPINE = False
+    logger.warning("pvporcupine non installato — wake word disattivato. Installa con: pip install pvporcupine")
+
 class WakeWordProcessor:
     def __init__(self, keyword: str = "jarvis", sensitivity: float = 0.5, model_path: str = ""):
+        if not _HAS_PORCUPINE:
+            raise RuntimeError("pvporcupine non installato")
         model_file = Path(model_path)
         if model_file.exists():
             self.porcupine = pvporcupine.create(
@@ -38,6 +46,9 @@ class WakeWordProcessor:
 
 def get_wake_word_processor(keyword: str = "jarvis", sensitivity: float = 0.5, model_path: str = ""):
     global _processor_instance, _processor_keyword, _processor_sensitivity
+    if not _HAS_PORCUPINE:
+        logger.warning("Wake word non disponibile — pvporcupine non installato")
+        return None
     if _processor_instance is None or _processor_keyword != keyword or _processor_sensitivity != sensitivity:
         if _processor_instance is not None:
             _processor_instance.delete()

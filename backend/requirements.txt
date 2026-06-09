@@ -21,7 +21,7 @@ soundfile>=0.12.1
 # TTS fallback cloud
 edge-tts>=6.1.9
 
-# TTS voice cloning (opzionale)
+# TTS voice cloning (opzionale — richiede PyTorch ~2GB)
 # TTS>=0.22.0
 
 # Memory
@@ -41,10 +41,10 @@ duckduckgo-search>=6.0.0
 # Config
 pyyaml>=6.0.1
 
-# Vision (opzionale)
+# Vision (opzionale — richiede PyTorch ~2GB)
 # ultralytics>=8.2.0
 
-# Wake word (installazione separata)
+# Wake word (installazione separata — no PyPI)
 # pvporcupine==1.9.5
 
 # Utilities
@@ -52,7 +52,5 @@ numpy>=1.26.0
 python-multipart>=0.0.9
 psutil>=5.9.0
 
-# RPA / UI Automation
-pyautogui>=0.9.54
-pillow>=10.0.0          # già richiesta da pyautogui, esplicitata
-pygetwindow>=0.0.9      # gestione finestre Windows (opzionale ma consigliato)
+# Pillow (usato da RPA screenshot, serve anche a kokoro/soundfile)
+pillow>=10.0.0

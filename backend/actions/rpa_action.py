@@ -39,11 +39,14 @@ Dipendenze (aggiunte a requirements.txt):
 
 import re
 import io
+import json
 import base64
 import asyncio
 import logging
 import platform
 import subprocess
+import urllib.request
+import urllib.error
 from pathlib import Path
 from datetime import datetime
 
@@ -125,6 +128,7 @@ class RPAAction(BaseAction):
         self._move_duration = rpa_cfg.get("move_duration", 0.3)   # secondi per movimento mouse
         self._screenshot_quality = rpa_cfg.get("screenshot_quality", 85)
         self._failsafe = rpa_cfg.get("failsafe", True)             # muovi mouse in angolo per stop
+        self._proxy_url = rpa_cfg.get("host_proxy_url", "")         # proxy per host Windows
 
     # ──────────────────────────────────────────────
     # pyautogui lazy init
@@ -150,6 +154,10 @@ class RPAAction(BaseAction):
     async def execute(self, command: str, **kwargs) -> str:
         sub = self._route(command.lower())
         logger.info(f"RPAAction: sub={sub}, cmd={command[:60]}")
+
+        # Se pyautogui non disponibile, proxa le chiamate all'host Windows
+        if self._pyautogui is None and self._proxy_url:
+            return await self._proxy_execute(sub, command)
 
         loop = asyncio.get_event_loop()
 
@@ -193,6 +201,155 @@ class RPAAction(BaseAction):
             "Non ho capito quale azione UI eseguire. Prova: "
             "'apri Chrome', 'fai uno screenshot', 'clicca su OK', 'premi Ctrl+S'."
         )
+
+    # ──────────────────────────────────────────────
+    # Proxy verso host_rpa_server.py (host Windows)
+    # ──────────────────────────────────────────────
+
+    async def _proxy_execute(self, sub: str, command: str) -> str:
+        """
+        Esegue il comando RPA via HTTP sul proxy Windows host
+        quando pyautogui non è disponibile (es. dentro Docker).
+        """
+        base = self._proxy_url.rstrip("/")
+
+        if sub == "screenshot":
+            data = self._proxy_call_sync("POST", f"{base}/api/rpa/screenshot")
+            return data.get("result", str(data))
+
+        if sub == "analyze":
+            # Proxy prende lo screenshot, poi noi lo analizziamo con LLM locale
+            b64_data = await self._proxy_call_async("POST", f"{base}/api/rpa/analyze")
+            if b64_data.get("result"):
+                return await self._analyze_with_vision(b64_data["result"])
+            return "Analisi schermo non disponibile via proxy."
+
+        if sub == "click":
+            coords = self._extract_coords(command) or (500, 300)
+            data = self._proxy_call_sync("POST", f"{base}/api/rpa/click", {
+                "x": coords[0], "y": coords[1], "button": "left", "clicks": 1,
+            })
+            return data.get("result", str(data))
+
+        if sub == "double_click":
+            coords = self._extract_coords(command) or (500, 300)
+            data = self._proxy_call_sync("POST", f"{base}/api/rpa/click", {
+                "x": coords[0], "y": coords[1], "button": "left", "clicks": 2,
+            })
+            return data.get("result", str(data))
+
+        if sub == "right_click":
+            coords = self._extract_coords(command) or (500, 300)
+            data = self._proxy_call_sync("POST", f"{base}/api/rpa/click", {
+                "x": coords[0], "y": coords[1], "button": "right", "clicks": 1,
+            })
+            return data.get("result", str(data))
+
+        if sub == "type":
+            text = self._extract_text_to_type(command) or "testo"
+            data = self._proxy_call_sync("POST", f"{base}/api/rpa/type", {"text": text})
+            return data.get("result", str(data))
+
+        if sub == "hotkey":
+            keys = self._extract_keys(command) or ["ctrl", "s"]
+            data = self._proxy_call_sync("POST", f"{base}/api/rpa/hotkey", {"keys": keys})
+            return data.get("result", str(data))
+
+        if sub == "open_app":
+            m = re.search(r"(?:apri|avvia|lancia|open|launch|start)\s+(.+)", command.lower())
+            app = m.group(1).strip() if m else command
+            data = self._proxy_call_sync("POST", f"{base}/api/rpa/open_app", {"app": app})
+            return data.get("result", str(data))
+
+        if sub == "open_file":
+            path_m = re.search(r"([A-Za-z]:\\[\w\\\.\-_ ]+|/[\w/\.\-_ ]+)", command)
+            path = path_m.group(1) if path_m else command
+            app = "code" if "code" in command.lower() else None
+            payload = {"path": path}
+            if app:
+                payload["app"] = app
+            data = self._proxy_call_sync("POST", f"{base}/api/rpa/open_file", payload)
+            return data.get("result", str(data))
+
+        if sub == "scroll":
+            direction = "up" if any(w in command.lower() for w in ("su", "alto", "up")) else "down"
+            m = re.search(r"(\d+)", command)
+            clicks = int(m.group(1)) if m else 3
+            data = self._proxy_call_sync("POST", f"{base}/api/rpa/scroll", {
+                "direction": direction, "clicks": clicks,
+            })
+            return data.get("result", str(data))
+
+        if sub == "drag":
+            coords_all = re.findall(r"\(?\s*(\d+)\s*,\s*(\d+)\s*\)?", command)
+            if len(coords_all) >= 2:
+                data = self._proxy_call_sync("POST", f"{base}/api/rpa/drag", {
+                    "x1": int(coords_all[0][0]), "y1": int(coords_all[0][1]),
+                    "x2": int(coords_all[1][0]), "y2": int(coords_all[1][1]),
+                })
+                return data.get("result", str(data))
+            return "Specifica origine e destinazione per il drag."
+
+        if sub == "screen_info":
+            data = self._proxy_call_sync("GET", f"{base}/api/rpa/screen_info")
+            result = data.get("result", {})
+            if isinstance(result, dict):
+                return f"Risoluzione: {result.get('width')}x{result.get('height')}, Mouse: ({result.get('mouse_x')},{result.get('mouse_y')})"
+            return str(data)
+
+        return "Comando RPA non supportato via proxy."
+
+    def _proxy_call_sync(self, method: str, url: str, json_data: dict | None = None) -> dict:
+        """Chiamata HTTP sincrona al proxy RPA (usata dentro executor)."""
+        try:
+            body = json.dumps(json_data).encode("utf-8") if json_data else None
+            req = urllib.request.Request(url, data=body, method=method)
+            req.add_header("Content-Type", "application/json")
+            with urllib.request.urlopen(req, timeout=15) as resp:
+                return json.loads(resp.read().decode("utf-8"))
+        except urllib.error.URLError as e:
+            logger.error(f"RPA proxy call fallita: {e}")
+            return {"status": "error", "message": f"Proxy non raggiungibile: {e.reason}"}
+        except Exception as e:
+            logger.error(f"RPA proxy error: {e}")
+            return {"status": "error", "message": str(e)}
+
+    async def _proxy_call_async(self, method: str, url: str, json_data: dict | None = None) -> dict:
+        """Chiamata HTTP asincrona al proxy RPA."""
+        try:
+            import httpx
+            async with httpx.AsyncClient(timeout=15.0) as client:
+                if method == "GET":
+                    resp = await client.get(url)
+                else:
+                    resp = await client.post(url, json=json_data or {})
+                return resp.json()
+        except Exception as e:
+            logger.error(f"RPA proxy async call fallita: {e}")
+            return {"status": "error", "message": str(e)}
+
+    async def _analyze_with_vision(self, b64_image: str) -> str:
+        """Analizza uno screenshot base64 con il LLM vision locale."""
+        if not self._llm:
+            return "LLM non disponibile per l'analisi."
+
+        prompt = (
+            "Analizza questo screenshot del desktop. "
+            "Descrivi cosa vedi (app aperte, contenuto principale, pulsanti visibili). "
+            "Sii conciso e preciso."
+        )
+        try:
+            import ollama
+            host = self._config.get("llm", {}).get("host", "http://localhost:11434")
+            client = ollama.Client(host=host)
+            resp = client.chat(
+                model="llava",
+                messages=[{"role": "user", "content": prompt, "images": [b64_image]}],
+            )
+            return resp["message"]["content"]
+        except Exception as e:
+            logger.warning(f"Vision LLM via proxy fallito: {e}")
+            return "Analisi schermo non disponibile."
 
     # ──────────────────────────────────────────────
     # Screenshot
