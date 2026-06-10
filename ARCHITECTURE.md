@@ -3,6 +3,11 @@
 ```
 Jarvis-Project/
 ├── docker-compose.yml          Orchestra 3 servizi (redis, backend, frontend)
+├── ARCHITECTURE.md             Questo file
+├── README.md                   Istruzioni di avvio e requisiti hardware
+├── GUIDA.md                    Guida all'uso del dataset per fine-tuning
+├── dataset_finetune.jsonl      Dataset per fine-tuning del LLM
+│
 ├── backend/                    FastAPI (Python 3.11)
 │   ├── main.py                 Entrypoint: crea app FastAPI, carica config, avvia uvicorn
 │   ├── requirements.txt        Dipendenze Python
@@ -11,9 +16,12 @@ Jarvis-Project/
 │   │   ├── settings.yaml       Config: LLM, speech, vision, memoria, azioni, git, terminal, focus, RPA
 │   │   └── persona.yaml        System prompt bilingue (IT/EN) per il LLM
 │   ├── api/
-│   │   ├── routes.py           20+ endpoint REST + 2 WebSocket (893 righe)
+│   │   ├── routes.py           30+ endpoint REST + 2 WebSocket (~960 righe)
 │   │   ├── websocket_manager   ConnectionManager + handler wake word + handler audio stream
-│   │   └── dependencies.py     Factory functions (get_config, get_brain, get_speech, get_actions, get_memory)
+│   │   └── dependencies.py     Factory functions (config, brain, speech, actions, memory, chat)
+│   ├── chat/
+│   │   ├── chat_manager.py     SQLite: CRUD sessioni + messaggi, auto-title, thread-safe
+│   │   └── __init__.py
 │   ├── brain/
 │   │   ├── llm_client.py       Ollama Client: chat(), chat_with_reflection(), warmup(), detect_language()
 │   │   ├── multiagent.py       MultiAgent: 5 specialisti + RAG + web search + contesto utente
@@ -37,46 +45,60 @@ Jarvis-Project/
 │   │   └── rpa_action.py       UI Automation: click, type, hotkey, scroll, drag, screenshot, vision analysis
 │   ├── memory/
 │   │   ├── ephemeral.py        Redis: memoria a breve termine (TTL 1h)
-│   │   └── persistent.py       ChromaDB: memoria a lungo termine (vettoriale) + preferenze utente
-│   └── vision/
-│       └── camera.py           Riconoscimento oggetti YOLOv8
+│   │   ├── persistent.py       ChromaDB: memoria a lungo termine (vettoriale) + preferenze utente
+│   │   └── rag_indexer.py      Indicizzatore documenti (PDF/TXT/MD) per RAG, watcher automatico
+│   ├── services/
+│   │   ├── briefing.py         Briefing quotidiano con notifica via WebSocket
+│   │   └── __init__.py
+│   ├── vision/
+│   │   └── camera.py           Riconoscimento oggetti YOLOv8
+│   ├── host_metrics_server.py  Server HTTP standalone per metriche host Windows (CPU/RAM/temp)
+│   └── host_rpa_server.py      Server HTTP standalone per azioni RPA su host Windows
+│
 ├── frontend/                   React + TypeScript + Three.js
 │   ├── Dockerfile              Build → Nginx statico con proxy_pass per /api/
 │   ├── package.json            dipendenze: react, three, @react-three/fiber, framer-motion, zustand
 │   ├── src/
-│   │   ├── App.tsx             Orchestratore: Arc Reactor 3D, dashboard metriche, chat, log, feedback
+│   │   ├── App.tsx             Orchestratore: top bar metriche, sidebar chat, reattore 3D, chat persistente
 │   │   ├── main.tsx            Entrypoint React
 │   │   ├── components/
+│   │   │   ├── Sidebar.tsx     Sidebar sessioni chat: crea, seleziona, rinomina (doppio click), elimina
+│   │   │   ├── ChatPanel.tsx   Input testo + file attachment + feedback ▲/▼ + TTS playback
 │   │   │   ├── HolographicDisplay.tsx    Anelli 3D concentrici + orbite rotanti (Three.js)
 │   │   │   ├── ParticleField.tsx         Campo particellare 3D
 │   │   │   ├── VoiceVisualizer.tsx       Visualizzatore audio 3D (instanced mesh)
-│   │   │   ├── ChatPanel.tsx             Input testo + file attachment + feedback ▲/▼ + TTS playback
 │   │   │   ├── Dashboard.tsx             HUD: ora, data, connessione
 │   │   │   └── StatusIndicator.tsx       Pulsante microfono + stati (idle/listening/processing/speaking)
 │   │   ├── hooks/
+│   │   │   ├── useStore.ts               Stato globale (zustand) — sessioni chat + messaggi WS + wake word
 │   │   │   ├── useWakeWord.ts            Cattura microfono PCM16 → WS → Porcupine
 │   │   │   ├── useAudioStream.ts         Cattura audio per trascrizione → WS
 │   │   │   ├── useWebSocket.ts           Gestisce messaggi JSON + audio binario (auto-reconnect)
-│   │   │   ├── useTTSPlayer.ts           Riproduce blob audio WAV (Web Audio API)
-│   │   │   └── useStore.ts               Stato globale (zustand)
+│   │   │   └── useTTSPlayer.ts           Riproduce blob audio WAV (Web Audio API)
 │   │   ├── utils/constants.ts            URL, colori, animazioni, particelle
-│   │   ├── types/index.ts                Definizioni TypeScript
-│   │   └── styles/globals.css            Stili scanline, vignetta, font, CRT overlay
+│   │   ├── types/index.ts                Definizioni TypeScript (WSMessage, AppStatus, ActionModule, SystemMetric)
+│   │   └── styles/globals.css            Font Inter + JetBrains Mono, base 15px, scrollbar, CRT scanline
 │   ├── index.html
 │   ├── tsconfig.json
 │   └── vite.config.ts
-├── models/                    (montato come volume Docker)
+│
+├── models/                     (montato come volume Docker)
 │   ├── voice/jarvis_sample.wav   [fornito dall'utente] campione per XTTS
 │   ├── piper/                    [automatico] modelli voce Piper
 │   ├── porcupine/jarvis.ppn      [da scaricare] file Porcupine personalizzato
 │   └── whisper/                  [automatico] modello faster-whisper (base)
-├── data/                       (montato come volume Docker)
-│   ├── chroma_db/              Persistenza memoria a lungo termine
-│   ├── screenshots/            Screenshot RPA
-│   └── feedback.jsonl          Feedback utente (rating, messaggio, intento)
+│
+├── data/                        (montato come volume Docker)
+│   ├── chroma_db/               Persistenza memoria a lungo termine
+│   ├── chats.db                 Database SQLite sessioni chat persistenti
+│   ├── screenshots/             Screenshot RPA
+│   ├── knowledge/               Documenti PDF/TXT/MD per RAG (indicizzazione automatica)
+│   └── feedback.jsonl           Feedback utente (rating, messaggio, intento)
+│
 └── scripts/
-    ├── run.ps1                 Avvio diretto (senza Docker)
-    └── setup_models.ps1        Download modelli Ollama + setup
+    ├── up.ps1                   Avvio Docker Compose con rebuild + avvio host_metrics + host_rpa
+    ├── run.ps1                  Avvio diretto (senza Docker)
+    └── setup_models.ps1         Download modelli Ollama + setup
 ```
 
 ## Flusso di elaborazione
@@ -85,6 +107,11 @@ Jarvis-Project/
 
 ```
 Browser (testo)  ──POST──>  Nginx  ──>  backend /api/chat
+                                      │
+                                      ├─ session_id opzionale → ChatManager (SQLite)
+                                      │   ├─ Crea/nuova sessione se non fornito
+                                      │   ├─ Salva messaggio utente
+                                      │   └─ Richiama auto_title se titolo ancora "Nuova chat"
                                       │
                                       ├─ PersistentMemory.search() (RAG: 3 chunk)
                                       │
@@ -103,7 +130,9 @@ Browser (testo)  ──POST──>  Nginx  ──>  backend /api/chat
                                       │
                                       ├─ PersistentMemory.store() (entrambi i turni)
                                       │
-                                      └─ JSON { response, intent, language }
+                                      ├─ ChatManager.add_message() + auto_title()
+                                      │
+                                      └─ JSON { response, intent, language, session_id }
 ```
 
 ### Input vocale (wake word + registrazione)
@@ -136,11 +165,36 @@ Browser (microfono)  ──PCM16──>  WebSocket /api/ws/audio
 ### Chat
 | Metodo | Endpoint | Descrizione |
 |--------|----------|-------------|
-| POST | `/api/chat` | Chat testuale con RAG + intent routing |
+| POST | `/api/chat` | Chat testuale con RAG + intent routing + sessione persistente |
 | POST | `/api/upload` | Upload file (UTF-8) per contesto |
 | POST | `/api/feedback` | Salva rating ▲/▼ in feedback.jsonl |
 | WS | `/api/ws/wake` | Streaming PCM per wake word |
 | WS | `/api/ws/audio` | Streaming audio → STT → LLM → TTS |
+
+### Chat Sessions (Step 8)
+| Metodo | Endpoint | Descrizione |
+|--------|----------|-------------|
+| GET | `/api/chats` | Elenco sessioni (con conteggio messaggi e ultimo messaggio) |
+| POST | `/api/chats` | Crea nuova sessione |
+| DELETE | `/api/chats/{id}` | Elimina sessione e relativi messaggi |
+| PATCH | `/api/chats/{id}` | Rinomina sessione |
+| GET | `/api/chats/{id}/messages` | Recupera messaggi di una sessione |
+
+### Memoria & RAG
+| Metodo | Endpoint | Descrizione |
+|--------|----------|-------------|
+| GET | `/api/memory/preferences` | Elenca preferenze utente |
+| POST | `/api/memory/preferences` | Salva preferenza |
+| DELETE | `/api/memory/preferences/{key}` | Elimina preferenza |
+| GET | `/api/rag/sources` | Elenca documenti indicizzati |
+| POST | `/api/rag/index` | (Re)indicizza cartella knowledge |
+| DELETE | `/api/rag/sources/{source}` | Rimuovi sorgente RAG |
+
+### Briefing
+| Metodo | Endpoint | Descrizione |
+|--------|----------|-------------|
+| POST | `/api/briefing/trigger` | Lancia briefing quotidiano manualmente |
+| GET | `/api/briefing/audio` | Recupera audio ultimo briefing |
 
 ### Git (Step 4)
 | Metodo | Endpoint | Descrizione |
@@ -192,12 +246,16 @@ Ollama (host Windows, :11434)
   ↑ host.docker.internal
 backend ──> redis:6379 (memoria breve)
 backend ──> ChromaDB (locale, persistente su volume)
+backend ──> SQLite (data/chats.db, persistente su volume)
 
 Browser ──:80──> Nginx (frontend container)
                   │
                   ├── /api/* ──proxy_pass──> backend:8765
                   │
                   └── /* ──> index.html (SPA React)
+
+host_metrics_server (Windows, :18765) ← host.docker.internal
+host_rpa_server     (Windows, :18766) ← host.docker.internal
 
 Tutti i container sulla rete `jarvis-net`
 ```
@@ -236,6 +294,27 @@ POST /api/chat  ──>  IntentRouter.route(text)
                     (reflection disabilitato di default)
 ```
 
+### Chat session flow
+
+```
+POST /api/chat (con o senza session_id)
+    │
+    ├─ session_id = None → ChatManager.create_session()
+    │                      → nuovo ID restituito in response.session_id
+    │
+    ├─ session_id fornito → ChatManager.get_session()
+    │                        → se non esiste, ne crea una nuova
+    │
+    ├─ ChatManager.add_message("user", testo, intent="")
+    │
+    ├─ (elaborazione LLM...)
+    │
+    ├─ ChatManager.add_message("assistant", risposta, intent)
+    │
+    └─ ChatManager.auto_title(session_id)
+       (solo se titolo ancora "Nuova chat")
+```
+
 ### Sistema di sicurezza terminale (3 livelli)
 
 ```
@@ -272,12 +351,14 @@ Comando utente (NL)
 - **ultralytics** — YOLOv8 per vision
 - **edge-tts** — sintesi vocale naturale Windows
 - **sounddevice** — cattura microfono
+- **sqlite3** — database chat persistenti (built-in, nessuna dipendenza aggiuntiva)
 
 ### Frontend
 - **React 18** con TypeScript
 - **Three.js** + `@react-three/fiber` — rendering 3D olografico
 - **framer-motion** — animazioni UI
 - **zustand** — stato globale
+- **Inter** + **JetBrains Mono** — font (sostituito Share Tech Mono per leggibilità)
 - **Nginx** — serve statiche + proxy `/api/` al backend
 
 ## Variabili d'ambiente
