@@ -35,6 +35,7 @@ services:
       - jarvis-net
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8765/api/status', timeout=3)"]
+      start_period: 60s
       interval: 15s
       timeout: 5s
       retries: 3

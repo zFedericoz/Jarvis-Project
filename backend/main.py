@@ -62,11 +62,12 @@ async def list_rag_sources():
 
 
 @app.post("/api/rag/index")
+@app.get("/api/rag/index")
 async def index_rag_folder(folder: str = "data/knowledge"):
     """Indicizza (o re-indicizza) tutti i file in una cartella."""
     from memory.rag_indexer import RAGIndexer
-    mem, _ = get_memory(config)
-    indexer = RAGIndexer(mem)
+    _, persistent_mem = get_memory(config)
+    indexer = RAGIndexer(persistent_mem)
     result = indexer.index_folder(folder)
     return {"indexed": result, "total_chunks": sum(result.values())}
 

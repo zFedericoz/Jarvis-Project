@@ -275,8 +275,12 @@ export default function JarvisDashboard() {
     {id:0,role:"system",text:"Sistemi ausiliari inizializzati. Reattore ARC stabile. In attesa di comandi, Signore."}
   ]);
   const [feedbackSent, setFeedbackSent] = useState<Record<number,number>>({});
+  const [attachedFiles, setAttachedFiles] = useState<{name:string;content:string}[]>([]);
+  const [dragOver, setDragOver] = useState(false);
   const msgIdRef = useRef(1);
   const chatEndRef = useRef<HTMLDivElement>(null!);
+  const chatContainerRef = useRef<HTMLDivElement>(null!);
+  const fileInputRef = useRef<HTMLInputElement>(null!);
   const abortRef = useRef<AbortController | null>(null);
 
   const { activeSessionId, chatHistory, setChatHistory, addChatHistory } = useStore();
@@ -299,6 +303,32 @@ export default function JarvisDashboard() {
 
   useEffect(() => { fetchMetrics(); const id = setInterval(fetchMetrics, 2000); return () => clearInterval(id); }, [fetchMetrics]);
 
+  const uploadFile = async (file: File) => {
+    const fd = new FormData();
+    fd.append("file", file);
+    try {
+      const r = await fetch(`${DOCKER_API}/api/upload`, {method:"POST", body:fd});
+      if (!r.ok) throw new Error(`HTTP ${r.status}`);
+      const d = await r.json();
+      setAttachedFiles(p => [...p, {name:d.filename, content:d.content}]);
+    } catch (err) {
+      console.error("Upload fallito:", err);
+    }
+  };
+
+  const handleFilePick = (e: React.ChangeEvent<HTMLInputElement>) => {
+    for (const f of e.target.files || []) uploadFile(f);
+    e.target.value = "";
+  };
+
+  const handleDrop = (e: React.DragEvent) => {
+    e.preventDefault();
+    setDragOver(false);
+    for (const f of e.dataTransfer.files) uploadFile(f);
+  };
+
+  const removeFile = (idx: number) => setAttachedFiles(p => p.filter((_,i) => i !== idx));
+
   const cpu = metrics?.cpu ?? 0;
   const ram = metrics?.ram ?? 0;
   const temp = metrics?.temp ?? 0;
@@ -317,11 +347,14 @@ export default function JarvisDashboard() {
 
   const handleSubmit = async (e: FormEvent) => {
     e.preventDefault();
-    if (!chatInput.trim() || isResponding) return;
-    const userMsg = chatInput.trim();
+    const hasContent = chatInput.trim() || attachedFiles.length > 0;
+    if (!hasContent || isResponding) return;
+    const userMsg = chatInput.trim() + (attachedFiles.length > 0 ? `\n\n[File allegati: ${attachedFiles.map(f=>f.name).join(", ")}]` : "");
+    const fileContent = attachedFiles.length > 0 ? attachedFiles.map(f => `=== ${f.name} ===\n${f.content}`).join("\n\n") : "";
     const uid = msgIdRef.current++;
     setMessages(p => [...p, {id:uid,role:"user",text:userMsg}]);
     setChatInput("");
+    setAttachedFiles([]);
     setIsResponding(true);
 
     const controller = new AbortController();
@@ -330,7 +363,7 @@ export default function JarvisDashboard() {
     try {
       const r = await fetch(`${DOCKER_API}/api/chat`, {
         method:"POST", headers:{"Content-Type":"application/json"},
-        body:JSON.stringify({text:userMsg, session_id: activeSessionId ?? undefined}),
+        body:JSON.stringify({text:userMsg, file_content: fileContent, session_id: activeSessionId ?? undefined}),
         signal: controller.signal,
       });
       clearTimeout(timeout);
@@ -404,7 +437,11 @@ export default function JarvisDashboard() {
 
           {/* Chat messages */}
           {displayMessages.length > 1 && (
-            <div style={{maxHeight:160,overflowY:"auto",display:"flex",flexDirection:"column",gap:4,padding:"4px 6px",background:"rgba(0,0,0,0.15)",borderRadius:4,border:`1px solid ${C.cyanFaint}`}}>
+            <div ref={chatContainerRef}
+              onDragOver={e=>{e.preventDefault();setDragOver(true);}}
+              onDragLeave={()=>setDragOver(false)}
+              onDrop={handleDrop}
+              style={{maxHeight:160,overflowY:"auto",display:"flex",flexDirection:"column",gap:4,padding:"4px 6px",background:dragOver?"rgba(0,229,255,0.08)":"rgba(0,0,0,0.15)",borderRadius:4,border:`1px solid ${dragOver?C.cyan:C.cyanFaint}`,transition:"background 0.15s, border-color 0.15s"}}>
               {displayMessages.slice(1).map((msg,i,arr) => {
                 const prevUser = msg.role==="system" ? arr.slice(0,i).reverse().find(m => m.role==="user") : null;
                 return (
@@ -444,8 +481,27 @@ export default function JarvisDashboard() {
             </div>
           </div>
 
+          {/* File chips */}
+          {attachedFiles.length > 0 && (
+            <div style={{flexShrink:0,display:"flex",gap:6,flexWrap:"wrap"}}>
+              {attachedFiles.map((f,i) => (
+                <span key={i} style={{fontSize:12,fontFamily:mono,background:"rgba(0,229,255,0.12)",border:`1px solid ${C.cyan}`,borderRadius:4,padding:"3px 10px",display:"flex",alignItems:"center",gap:6,color:C.cyan,boxShadow:"0 0 8px rgba(0,229,255,0.12)"}}>
+                  <span style={{fontSize:14}}>📎</span> {f.name}
+                  <span onClick={()=>removeFile(i)} style={{cursor:"pointer",color:C.red,fontSize:15,lineHeight:"14px",fontWeight:"bold",marginLeft:2,opacity:0.8}} title="Rimuovi">×</span>
+                </span>
+              ))}
+            </div>
+          )}
+
           {/* Input */}
-          <form onSubmit={handleSubmit} style={{flexShrink:0,display:"flex",gap:6}}>
+          <form onSubmit={handleSubmit} style={{flexShrink:0,display:"flex",gap:6,alignItems:"center"}}>
+            <input type="file" ref={fileInputRef} onChange={handleFilePick} style={{display:"none"}} multiple />
+            <button type="button" onClick={()=>fileInputRef.current?.click()}
+              style={{width:36,height:36,flexShrink:0,background:"rgba(0,229,255,0.08)",border:`1px solid ${C.cyan}`,color:C.cyan,cursor:"pointer",borderRadius:4,display:"flex",alignItems:"center",justifyContent:"center",fontSize:18,boxShadow:"0 0 6px rgba(0,229,255,0.15)",transition:"background 0.15s"}}
+              title="Allega file (docx, xlsx, pdf, codice...)"
+              onMouseEnter={e=>(e.currentTarget.style.background="rgba(0,229,255,0.18)")}
+              onMouseLeave={e=>(e.currentTarget.style.background="rgba(0,229,255,0.08)")}
+            >📎</button>
             <input type="text" value={chatInput} onChange={e=>setChatInput(e.target.value)}
               placeholder="Invia una direttiva testuale a J.A.R.V.I.S..."
               disabled={isResponding}
@@ -458,7 +514,7 @@ export default function JarvisDashboard() {
                 ⏹ STOP
               </button>
             ) : (
-              <button type="submit" disabled={!chatInput.trim()}
+              <button type="submit" disabled={!chatInput.trim() && attachedFiles.length === 0}
                 style={{background:"rgba(0,229,255,0.1)",border:`1px solid ${C.cyan}`,color:C.cyan,fontFamily:mono,fontSize:12,padding:"0 14px",cursor:"pointer",borderRadius:4}}
               >
                 EXEC

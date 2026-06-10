@@ -291,11 +291,37 @@ async def chat_text(payload: ChatRequest, request: Request = None):
 @router.post("/upload", response_model=UploadResponse)
 async def upload_file(file: UploadFile = File(...)):
     content = await file.read()
-    text_content = content.decode("utf-8", errors="replace")
-    file_path = UPLOAD_DIR / file.filename
+    filename = file.filename or "upload"
+    file_path = UPLOAD_DIR / filename
+    file_path.parent.mkdir(parents=True, exist_ok=True)
     with open(file_path, "wb") as f:
         f.write(content)
-    return UploadResponse(filename=file.filename, size=len(content), content=text_content)
+
+    ext = Path(filename).suffix.lower()
+    text_content = ""
+
+    try:
+        if ext == ".docx":
+            from docx import Document
+            doc = Document(file_path)
+            text_content = "\n".join(p.text for p in doc.paragraphs)
+        elif ext == ".xlsx":
+            import openpyxl
+            wb = openpyxl.load_workbook(file_path, read_only=True, data_only=True)
+            rows = []
+            for sheet in wb.worksheets:
+                for row in sheet.iter_rows(values_only=True):
+                    rows.append("\t".join(str(c) if c is not None else "" for c in row))
+            text_content = "\n".join(rows)
+        elif ext in {".py", ".js", ".ts", ".jsx", ".tsx", ".yaml", ".yml", ".json", ".md", ".txt", ".rst", ".html", ".css", ".csv", ".xml", ".env", ".cfg", ".ini", ".toml", ".sql"}:
+            text_content = content.decode("utf-8", errors="replace")
+        else:
+            text_content = content.decode("utf-8", errors="replace")
+    except Exception as e:
+        logger.warning(f"Estrazione testo fallita per {filename}: {e}")
+        text_content = f"[Impossibile estrarre il testo: {e}]"
+
+    return UploadResponse(filename=filename, size=len(content), content=text_content)
 
 
 @router.post("/feedback")
