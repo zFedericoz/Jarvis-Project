@@ -8,6 +8,7 @@ import re
 from datetime import datetime, timezone
 from collections import deque
 from fastapi import APIRouter, WebSocket, UploadFile, File, Request
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 from pathlib import Path
 
@@ -113,6 +114,7 @@ class ChatRequest(BaseModel):
     text: str = ""
     file_content: str = ""
     session_id: int | None = None
+    stream: bool = False
 
 class ChatResponse(BaseModel):
     response: str
@@ -120,6 +122,16 @@ class ChatResponse(BaseModel):
     language: str
     audio: str | None = None
     session_id: int | None = None
+    sources: list[dict] = []
+
+async def _sse_events(r: ChatResponse):
+    yield f"data: {json.dumps({'type': 'done', 'response': r.response, 'intent': r.intent, 'language': r.language, 'session_id': r.session_id})}\n\n"
+
+def _abort_response(session_id: int | None, stream: bool):
+    r = ChatResponse(response="Richiesta interrotta.", intent="none", language="it", audio=None, session_id=session_id)
+    if stream:
+        return StreamingResponse(_sse_events(r), media_type="text/event-stream")
+    return r
 
 class StatusResponse(BaseModel):
     status: str
@@ -209,7 +221,7 @@ async def websocket_audio(ws: WebSocket):
     )
     manager.disconnect(ws)
 
-@router.post("/chat", response_model=ChatResponse)
+@router.post("/chat")
 async def chat_text(payload: ChatRequest, request: Request = None):
     config = get_config()
     text = payload.text.strip()
@@ -217,7 +229,10 @@ async def chat_text(payload: ChatRequest, request: Request = None):
     session_id = payload.session_id
 
     if not text and not file_content:
-        return ChatResponse(response="No input provided.", intent="none", language="it", audio=None, session_id=session_id)
+        r = ChatResponse(response="No input provided.", intent="none", language="it", audio=None, session_id=session_id)
+        if payload.stream:
+            return StreamingResponse(_sse_events(r), media_type="text/event-stream")
+        return r
 
     if file_content:
         text = f"{text}\n\n[File content]:\n{file_content}" if text else f"[File content]:\n{file_content}"
@@ -242,7 +257,7 @@ async def chat_text(payload: ChatRequest, request: Request = None):
     _, persistent_memory = get_memory(config)
 
     if request and await request.is_disconnected():
-        return ChatResponse(response="Richiesta interrotta.", intent="none", language="it", audio=None, session_id=session_id)
+        return _abort_response(session_id, payload.stream)
 
     lang = llm.detect_language(text)
     context.set_language(lang)
@@ -256,36 +271,70 @@ async def chat_text(payload: ChatRequest, request: Request = None):
         prompt = text
 
     if request and await request.is_disconnected():
-        return ChatResponse(response="Richiesta interrotta.", intent="none", language="it", audio=None, session_id=session_id)
+        return _abort_response(session_id, payload.stream)
 
     intent = intent_router.route(original_query)
 
-    if intent == "git":
-        repo_path = persistent_memory.get_preference("cartella_progetti")
-        response = await actions["git"].execute(original_query, repo_path=repo_path)
-        _push_log("info", f"Git: {original_query[:60]}")
-    elif intent in actions:
-        response = await actions[intent].execute(original_query)
-    else:
-        response = multiagent.chat(
-            prompt, context.get_context(),
-            language=lang, intent=intent,
-            search_query=original_query,
-        )
+    if intent in ("git", "terminal", "rpa", "productivity", "system_control", "media_player"):
+        if intent == "git":
+            repo_path = persistent_memory.get_preference("cartella_progetti")
+            response = await actions["git"].execute(original_query, repo_path=repo_path)
+            _push_log("info", f"Git: {original_query[:60]}")
+        else:
+            response = await actions[intent].execute(original_query)
+
+        if request and await request.is_disconnected():
+            return _abort_response(session_id, payload.stream)
+
+        context.add_turn("user", original_query)
+        context.add_turn("assistant", response)
+        persistent_memory.store(original_query, metadata={"role": "user", "intent": intent})
+        persistent_memory.store(response, metadata={"role": "assistant", "intent": intent})
+        chat_mgr.add_message(session_id, "assistant", response, intent)
+        chat_mgr.auto_title(session_id)
+
+        r = ChatResponse(response=response, intent=intent, language=lang, audio=None, session_id=session_id)
+        if payload.stream:
+            return StreamingResponse(_sse_events(r), media_type="text/event-stream")
+        return r
+
+    # ── Streaming LLM response ───────────────────────────────────────────────
+    if payload.stream:
+        async def stream_events():
+            full_response = ""
+            for token in multiagent.chat_stream(prompt, context.get_context(), language=lang, intent=intent, search_query=original_query):
+                full_response += token
+                yield f"data: {json.dumps({'type': 'token', 'text': token})}\n\n"
+            sources = multiagent.last_sources
+            yield f"data: {json.dumps({'type': 'done', 'response': full_response, 'intent': intent, 'language': lang, 'session_id': session_id, 'sources': sources})}\n\n"
+
+            context.add_turn("user", original_query)
+            context.add_turn("assistant", full_response)
+            persistent_memory.store(original_query, metadata={"role": "user", "intent": intent})
+            persistent_memory.store(full_response, metadata={"role": "assistant", "intent": intent})
+            chat_mgr.add_message(session_id, "assistant", full_response, intent)
+            chat_mgr.auto_title(session_id)
+
+        return StreamingResponse(stream_events(), media_type="text/event-stream")
+
+    # ── Non-streaming LLM response ───────────────────────────────────────────
+    response = multiagent.chat(
+        prompt, context.get_context(),
+        language=lang, intent=intent,
+        search_query=original_query,
+    )
 
     if request and await request.is_disconnected():
-        return ChatResponse(response="Richiesta interrotta.", intent="none", language="it", audio=None, session_id=session_id)
+        return _abort_response(session_id, payload.stream)
 
     context.add_turn("user", original_query)
     context.add_turn("assistant", response)
-
     persistent_memory.store(original_query, metadata={"role": "user", "intent": intent})
     persistent_memory.store(response, metadata={"role": "assistant", "intent": intent})
-
     chat_mgr.add_message(session_id, "assistant", response, intent)
     chat_mgr.auto_title(session_id)
 
-    return ChatResponse(response=response, intent=intent, language=lang, audio=None, session_id=session_id)
+    return ChatResponse(response=response, intent=intent, language=lang, audio=None, session_id=session_id, sources=multiagent.last_sources)
 
 
 @router.post("/upload", response_model=UploadResponse)

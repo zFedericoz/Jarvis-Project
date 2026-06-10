@@ -161,6 +161,7 @@ class MultiAgent:
         """
         self.llm  = llm_client
         self._mem = persistent_memory
+        self._last_sources: list[dict] = []
 
     # ──────────────────────────────────────────────────────────────────────────
     # Mapping e selezione specialista
@@ -248,27 +249,36 @@ class MultiAgent:
     def _needs_web_search(self, message: str) -> bool:
         return any(re.search(p, message.lower()) for p in NEED_SEARCH_PATTERNS)
 
-    def _search_web(self, query: str, max_results: int = 4) -> str:
-        """Esegue una ricerca DuckDuckGo e ritorna i risultati troncati al budget."""
+    def _search_web(self, query: str, max_results: int = 4):
+        """Esegue una ricerca DuckDuckGo.
+        Returns:
+            (text_for_llm, sources_list) — sources_list è una lista di dict con 'title' e 'url'.
+        """
         try:
             with DDGS() as ddgs:
                 results = list(ddgs.text(query, max_results=max_results))
             if not results:
-                return ""
+                return ("", [])
 
             lines = []
+            sources = []
             total = 0
-            for r in results:
-                snippet = f"- {r.get('title', '')}: {r.get('body', '')[:300]}"
+            for i, r in enumerate(results, 1):
+                title = r.get("title", "")
+                url = r.get("href", "")
+                body = r.get("body", "")
+                snippet = f"- [{i}] {title}: {body[:300]}"
                 if total + len(snippet) > _WEB_CHAR_BUDGET:
                     break
                 lines.append(snippet)
                 total += len(snippet)
+                if url:
+                    sources.append({"title": title or url, "url": url})
 
-            return "\n".join(lines)
+            return ("\n".join(lines), sources)
         except Exception as e:
             logger.warning(f"Web search fallita: {e}")
-            return ""
+            return ("", [])
 
     # ──────────────────────────────────────────────────────────────────────────
     # Contesto utente da memoria persistente
@@ -284,6 +294,10 @@ class MultiAgent:
     # Entry point principale
     # ──────────────────────────────────────────────────────────────────────────
 
+    @property
+    def last_sources(self) -> list[dict]:
+        return self._last_sources
+
     def chat(
         self,
         message: str,
@@ -292,7 +306,19 @@ class MultiAgent:
         intent: str = "general",
         search_query: str | None = None,
     ) -> str:
+        self._last_sources = []
+        return "".join(self._chat_stream_impl(message, context, language, intent, search_query, use_reflection=intent in _REFLECTION_INTENTS))
 
+    def chat_stream(self, message: str, context: list[dict] | None = None,
+                    language: str = "it", intent: str = "general",
+                    search_query: str | None = None):
+        self._last_sources = []
+        yield from self._chat_stream_impl(message, context, language, intent, search_query, use_reflection=False)
+
+    def _chat_stream_impl(self, message: str, context: list[dict] | None = None,
+                          language: str = "it", intent: str = "general",
+                          search_query: str | None = None,
+                          use_reflection: bool = False):
         category   = self._map_intent(intent)
         specialist = self._specialist_prompt(category, language)
         query      = search_query or message
@@ -302,41 +328,38 @@ class MultiAgent:
         user_ctx = self._user_context()
         if user_ctx:
             extra_parts.append(user_ctx)
-            logger.debug("Contesto utente iniettato nel prompt")
 
         # 2. RAG — sempre attivo, filtrato per rilevanza
         rag_ctx = self._search_rag(query)
         if rag_ctx:
             extra_parts.append(rag_ctx)
 
-        # 3. Web search — solo se necessario E il RAG non copre già la domanda
-        #    (evitiamo ricerche web ridondanti se la knowledge base risponde)
+        # 3. Web search
         rag_already_covers = bool(rag_ctx)
         if self._needs_web_search(query) and not rag_already_covers:
             logger.info(f"Web search attivata per: {query[:80]}")
             web_results = self._search_web(query)
-            if web_results:
+            if web_results[0]:
                 extra_parts.append(
                     "Risultati web (usa solo se pertinenti, ignora altrimenti):\n"
-                    + web_results
+                    + web_results[0]
                 )
+                self._last_sources = web_results[1]
+            else:
+                self._last_sources = []
 
-        # Componi il prompt specialista finale
         full_specialist = specialist
         if extra_parts:
             full_specialist = specialist + "\n\n" + "\n\n".join(extra_parts)
 
-        # 4. Reflection attiva per intent che richiedono alta qualità
-        use_reflection = intent in _REFLECTION_INTENTS
         if use_reflection:
-            logger.debug(f"Reflection abilitata per intent='{intent}'")
-            return self.llm.chat_with_reflection(
+            yield self.llm.chat_with_reflection(
                 message, context, language,
                 extra_system_prompt=full_specialist,
                 min_score=7, max_reflect_rounds=1,
             )
         else:
-            return self.llm.chat(
+            yield from self.llm.chat_stream(
                 message, context, language,
                 extra_system_prompt=full_specialist,
             )

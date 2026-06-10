@@ -6,6 +6,31 @@ import Sidebar from "./components/Sidebar";
 import { useStore } from "./hooks/useStore";
 import { API_URL } from "./utils/constants";
 
+function _md(s:string){return s.replace(/\*\*(.+?)\*\*/g,'<b>$1</b>').replace(/\*(.+?)\*/g,'<i>$1</i>').replace(/`(.+?)`/g,'<code style=\"background:rgba(0,0,0,0.3);border-radius:2px;padding:0 3px;font-size:0.9em\">$1</code>').replace(/\[([^\]]+)\]\(([^)]+)\)/g,'<a href=\"$2\" style=\"color:#00e5ff;text-decoration:underline\">$1</a>');}
+
+function MarkdownRenderer({ content }: { content: string }) {
+  const lines = content.split("\n");
+  const elements: ReactNode[] = [];
+  let inCode = false, codeLang = "", codeLines: string[] = [], codeIdx = 0;
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i];
+    if (line.startsWith("```")) {
+      if (inCode) {
+        elements.push(<pre key={`c${codeIdx}`} style={{background:"rgba(0,0,0,0.4)",borderRadius:4,padding:"6px 8px",margin:"4px 0",overflow:"auto",fontSize:11,fontFamily:"'JetBrains Mono','Consolas',monospace",lineHeight:1.5}}><code>{codeLines.join("\n")}</code></pre>);
+        codeIdx++; codeLines=[]; codeLang=""; inCode=false;
+      } else { inCode=true; codeLang=line.slice(3).trim(); }
+      continue;
+    }
+    if (inCode) { codeLines.push(line); continue; }
+    if (!line.trim()) { elements.push(<div key={`b${i}`} style={{height:4}} />); continue; }
+    const isLi = /^[-*]\s/.test(line) || /^\d+\.\s/.test(line);
+    if (isLi) { elements.push(<div key={`l${i}`} style={{display:"flex",gap:6,paddingLeft:8}}><span style={{color:"#00e5ff"}}>•</span><span dangerouslySetInnerHTML={{__html:_md(line.replace(/^[-*\d]+\.\s+/,""))}} /></div>); }
+    else { elements.push(<div key={`p${i}`} dangerouslySetInnerHTML={{__html:_md(line)}} />); }
+  }
+  if (inCode && codeLines.length>0) elements.push(<pre key={`c${codeIdx}`} style={{background:"rgba(0,0,0,0.4)",borderRadius:4,padding:"6px 8px",margin:"4px 0",overflow:"auto",fontSize:11,fontFamily:"'JetBrains Mono','Consolas',monospace",lineHeight:1.5}}><code>{codeLines.join("\n")}</code></pre>);
+  return <>{elements}</>;
+}
+
 const HOST_METRICS_URL = "http://localhost:18765";
 const DOCKER_API = "";
 
@@ -19,15 +44,26 @@ async function fetchFromBest(urls: string[]): Promise<any> {
   return null;
 }
 
-const C = {
-  bg: "#050e14", bgPanel: "#071520", bgPanelHover: "#0a1e2e",
-  cyan: "#00e5ff", cyanDim: "#00b8cc", cyanFaint: "rgba(0,229,255,0.08)",
-  green: "#00ff88", greenDim: "#00cc6a", amber: "#ffaa00",
-  red: "#ff4455", purple: "#a855f7",
-  border: "rgba(0,229,255,0.18)", borderStrong: "rgba(0,229,255,0.45)",
-  text: "#c8eef8", textDim: "rgba(200,238,248,0.6)", textFaint: "rgba(200,238,248,0.3)",
+const THEMES = {
+  dark: {
+    bg: "#050e14", bgPanel: "#071520", bgPanelHover: "#0a1e2e",
+    cyan: "#00e5ff", cyanDim: "#00b8cc", cyanFaint: "rgba(0,229,255,0.08)",
+    green: "#00ff88", greenDim: "#00cc6a", amber: "#ffaa00",
+    red: "#ff4455", purple: "#a855f7",
+    border: "rgba(0,229,255,0.18)", borderStrong: "rgba(0,229,255,0.45)",
+    text: "#c8eef8", textDim: "rgba(200,238,248,0.6)", textFaint: "rgba(200,238,248,0.3)",
+  },
+  light: {
+    bg: "#f0f4f8", bgPanel: "#e2e8f0", bgPanelHover: "#cbd5e1",
+    cyan: "#0284c7", cyanDim: "#0369a1", cyanFaint: "rgba(2,132,199,0.08)",
+    green: "#059669", greenDim: "#047857", amber: "#d97706",
+    red: "#dc2626", purple: "#7c3aed",
+    border: "rgba(2,132,199,0.18)", borderStrong: "rgba(2,132,199,0.45)",
+    text: "#0f172a", textDim: "rgba(15,23,42,0.6)", textFaint: "rgba(15,23,42,0.3)",
+  },
 };
 
+let C = THEMES.dark;
 const font = "'Inter', 'Segoe UI', 'Helvetica Neue', sans-serif";
 const mono = "'JetBrains Mono', 'Consolas', 'Courier New', monospace";
 
@@ -271,12 +307,15 @@ export default function JarvisDashboard() {
   const [listening, setListening] = useState(false);
   const [isResponding, setIsResponding] = useState(false);
   const [chatInput, setChatInput] = useState("");
-  const [messages, setMessages] = useState<{id:number;role:string;text:string}[]>([
+  const [messages, setMessages] = useState<{id:number;role:string;text:string;sources?:any[];commands?:string[]}[]>([
     {id:0,role:"system",text:"Sistemi ausiliari inizializzati. Reattore ARC stabile. In attesa di comandi, Signore."}
   ]);
   const [feedbackSent, setFeedbackSent] = useState<Record<number,number>>({});
   const [attachedFiles, setAttachedFiles] = useState<{name:string;content:string}[]>([]);
   const [dragOver, setDragOver] = useState(false);
+  const [theme, setTheme] = useState<"dark"|"light">("dark");
+  const [speedDialOpen, setSpeedDialOpen] = useState(false);
+  C = THEMES[theme];
   const msgIdRef = useRef(1);
   const chatEndRef = useRef<HTMLDivElement>(null!);
   const chatContainerRef = useRef<HTMLDivElement>(null!);
@@ -294,6 +333,14 @@ export default function JarvisDashboard() {
       });
       setFeedbackSent(p => ({...p, [msgId]:rating}));
     } catch {}
+  };
+
+  const exportChat = () => {
+    const txt = displayMessages.map(m => `${m.role === "user" ? "TU" : "J.A.R.V.I.S."}: ${m.text}`).join("\n\n---\n\n");
+    const blob = new Blob([txt], {type:"text/plain;charset=utf-8"});
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a"); a.href = url; a.download = `jarvis-${new Date().toISOString().slice(0,10)}.txt`; a.click();
+    URL.revokeObjectURL(url);
   };
 
   const fetchMetrics = useCallback(async () => {
@@ -357,28 +404,58 @@ export default function JarvisDashboard() {
     setAttachedFiles([]);
     setIsResponding(true);
 
+    let sid = 0;
+    let sessionIdReturned: number | null = null;
+
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), 120000);
     abortRef.current = controller;
     try {
       const r = await fetch(`${DOCKER_API}/api/chat`, {
         method:"POST", headers:{"Content-Type":"application/json"},
-        body:JSON.stringify({text:userMsg, file_content: fileContent, session_id: activeSessionId ?? undefined}),
+        body:JSON.stringify({text:userMsg, file_content: fileContent, session_id: activeSessionId ?? undefined, stream: true}),
         signal: controller.signal,
       });
       clearTimeout(timeout);
       abortRef.current = null;
       if (!r.ok) throw new Error(`HTTP ${r.status}`);
-      const d = await r.json();
-      const sid = msgIdRef.current++;
-      setMessages(p => [...p, {id:sid,role:"system",text:d.response || d.detail || "OK"}]);
 
-      if (d.session_id && !activeSessionId) {
-        const store = useStore.getState();
-        store.setActiveSessionId(d.session_id);
+      const reader = r.body?.getReader();
+      if (!reader) { setIsResponding(false); return; }
+      const decoder = new TextDecoder();
+      let buffer = "";
+      let responseText = "";
+
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        buffer += decoder.decode(value, { stream: true });
+        const lines = buffer.split("\n");
+        buffer = lines.pop() || "";
+        for (const line of lines) {
+          if (!line.startsWith("data: ")) continue;
+          const data = line.slice(6);
+          try {
+            const ev = JSON.parse(data);
+            if (ev.type === "token") {
+              responseText += ev.text;
+              if (sid === 0) { sid = msgIdRef.current++; setMessages(p => [...p, {id:sid,role:"system",text:""}]); }
+              setMessages(p => p.map(m => m.id === sid ? {...m, text: responseText} : m));
+            } else if (ev.type === "done") {
+              responseText = ev.response;
+              if (sid === 0) { sid = msgIdRef.current++; }
+              setMessages(p => p.map(m => m.id === sid ? {...m, text: responseText, sources: ev.sources || []} : m));
+              sessionIdReturned = ev.session_id;
+            }
+          } catch {}
+        }
+      }
+
+      if (sessionIdReturned && !activeSessionId) {
+        useStore.getState().setActiveSessionId(sessionIdReturned);
         const sr = await fetch(`${API_URL}/chats`);
         const sj = await sr.json();
-        if (sj.sessions) store.setSessions(sj.sessions);
+        if (sj.sessions) { useStore.getState().setSessions(sj.sessions); }
       }
     } catch (err) {
       const aborted = (err as Error)?.name === "AbortError";
@@ -416,7 +493,15 @@ export default function JarvisDashboard() {
         <div style={{flex:1,minWidth:0,display:"flex",alignItems:"center",paddingLeft:8}}>
           <SystemLog compact />
         </div>
-        <div style={{fontFamily:mono,fontSize:12,color:C.textFaint,flexShrink:0}}>{new Date().toLocaleTimeString('it-IT')}</div>
+        <div style={{fontFamily:mono,fontSize:12,color:C.textFaint,flexShrink:0,display:"flex",alignItems:"center",gap:8}}>
+          <span onClick={()=>setTheme(t=>t==="dark"?"light":"dark")}
+            style={{cursor:"pointer",fontSize:14,color:C.amber,transition:"transform 0.2s"}}
+            title="Cambia tema">{theme==="dark"?"☀️":"🌙"}</span>
+          <span onClick={exportChat}
+            style={{cursor:"pointer",fontSize:12,color:C.textDim}}
+            title="Esporta conversazione">📥</span>
+          {new Date().toLocaleTimeString('it-IT')}
+        </div>
       </div>
 
       {/* ── MAIN LAYOUT ── */}
@@ -433,6 +518,22 @@ export default function JarvisDashboard() {
           {/* Reactor */}
           <div style={{flex:1,background:"rgba(0,0,0,0.2)",borderRadius:4,border:`1px solid ${C.cyanFaint}`,overflow:"hidden",position:"relative",minHeight:120}}>
             <ArcReactor3D isResponding={isResponding} />
+          </div>
+
+          {/* Quick action buttons */}
+          <div style={{flexShrink:0,display:"flex",gap:4,flexWrap:"wrap"}}>
+            {[
+              {icon:"📸",label:"Screenshot",cmd:"Fai uno screenshot"},
+              {icon:"⎇",label:"Terminale",cmd:"apri il terminale"},
+              {icon:"🔒",label:"Blocca PC",cmd:"blocca il PC"},
+              {icon:"📊",label:"Git status",cmd:"git status"},
+            ].map((a,i) => (
+              <button key={i} onClick={()=>{setChatInput(a.cmd);setTimeout(()=>document.querySelector<HTMLFormElement>('form')?.requestSubmit(),50)}}
+                style={{fontSize:11,fontFamily:"'JetBrains Mono','Consolas',monospace",background:C.cyanFaint,border:`1px solid ${C.border}`,color:C.cyanDim,borderRadius:3,padding:"2px 8px",cursor:"pointer",display:"flex",alignItems:"center",gap:4,transition:"background 0.15s"}}
+                onMouseEnter={e=>(e.currentTarget.style.background=C.cyanFaint?.replace("0.08","0.15"))}
+                onMouseLeave={e=>(e.currentTarget.style.background=C.cyanFaint)}
+                title={a.cmd}>{a.icon} {a.label}</button>
+            ))}
           </div>
 
           {/* Chat messages */}
@@ -455,13 +556,22 @@ export default function JarvisDashboard() {
                   <span style={{fontSize:9,color:msg.role==="user"?C.cyan:C.green,display:"block",marginBottom:1,fontFamily:mono,letterSpacing:"0.05em"}}>
                     {msg.role==="user" ? "TU" : "J.A.R.V.I.S."}
                   </span>
-                  {msg.text}
+                  {msg.role === "system" ? <MarkdownRenderer content={msg.text} /> : msg.text}
                   {msg.role==="system" && prevUser && (
                     <div style={{display:"flex",gap:4,marginTop:4}}>
                       <span onClick={() => sendFeedback(msg.id,2,prevUser.text,msg.text)}
                         style={{cursor:"pointer",fontSize:13,color:feedbackSent[msg.id]===2?C.green:C.textFaint,opacity:0.6}}>▲</span>
                       <span onClick={() => sendFeedback(msg.id,1,prevUser.text,msg.text)}
                         style={{cursor:"pointer",fontSize:13,color:feedbackSent[msg.id]===1?C.red:C.textFaint,opacity:0.6}}>▼</span>
+                    </div>
+                  )}
+                  {(msg as any).sources?.length > 0 && (
+                    <div style={{marginTop:4,display:"flex",gap:6,flexWrap:"wrap"}}>
+                      {(msg as any).sources.map((s:any,i:number) => (
+                        <a key={i} href={s.url} target="_blank" rel="noopener noreferrer"
+                          style={{fontSize:10,fontFamily:"'JetBrains Mono','Consolas',monospace",color:"#00e5ff",textDecoration:"none",border:"1px solid rgba(0,229,255,0.25)",borderRadius:3,padding:"1px 6px",opacity:0.7}}
+                          title={s.url}>📰 {s.title}</a>
+                      ))}
                     </div>
                   )}
                 </div>
@@ -492,6 +602,22 @@ export default function JarvisDashboard() {
               ))}
             </div>
           )}
+
+          {/* Speed dial */}
+          <div style={{flexShrink:0}}>
+            <button onClick={()=>setSpeedDialOpen(!speedDialOpen)}
+              style={{fontSize:11,fontFamily:mono,background:"transparent",border:`1px solid ${C.border}`,color:C.textDim,borderRadius:3,padding:"1px 8px",cursor:"pointer",width:"100%"}}>
+              {speedDialOpen ? "▼" : "▶"} Comandi rapidi
+            </button>
+            {speedDialOpen && (
+              <div style={{display:"flex",gap:4,flexWrap:"wrap",marginTop:4}}>
+                {["Che ore sono?","Raccontami una barzelletta","Fai un briefing","Cerca su web ultime notizie","Apri Visual Studio Code","Scrivi una poesia"].map((cmd,i) => (
+                  <button key={i} onClick={()=>{setChatInput(cmd);setTimeout(()=>document.querySelector<HTMLFormElement>('form')?.requestSubmit(),50)}}
+                    style={{fontSize:10,fontFamily:mono,background:C.cyanFaint,border:`1px solid ${C.border}`,color:C.cyanDim,borderRadius:3,padding:"1px 6px",cursor:"pointer",whiteSpace:"nowrap"}}>{cmd}</button>
+                ))}
+              </div>
+            )}
+          </div>
 
           {/* Input */}
           <form onSubmit={handleSubmit} style={{flexShrink:0,display:"flex",gap:6,alignItems:"center"}}>

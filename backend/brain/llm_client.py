@@ -50,12 +50,6 @@ class LLMClient:
     def chat(self, message: str, context: list[dict] | None = None, language: str = "it",
              extra_system_prompt: str = "",
              system_override: str | None = None) -> str:
-        """
-        Args:
-            system_override: se fornito, sostituisce COMPLETAMENTE il system prompt.
-                             Usato da GitAction per il prompt dei commit message.
-            extra_system_prompt: come prima — AGGIUNTO in coda al system prompt base.
-        """
         messages = self._build_messages(
             message, context, language, extra_system_prompt, system_override
         )
@@ -66,6 +60,24 @@ class LLMClient:
             keep_alive=-1,
         )
         return resp["message"]["content"]
+
+    def chat_stream(self, message: str, context: list[dict] | None = None, language: str = "it",
+                    extra_system_prompt: str = "",
+                    system_override: str | None = None):
+        messages = self._build_messages(
+            message, context, language, extra_system_prompt, system_override
+        )
+        stream = self.client.chat(
+            model=self.model,
+            messages=messages,
+            options=self._options(),
+            keep_alive=-1,
+            stream=True,
+        )
+        for chunk in stream:
+            content = chunk.get("message", {}).get("content", "")
+            if content:
+                yield content
 
     def chat_with_reflection(self, message: str, context: list[dict] | None = None,
                               language: str = "it", extra_system_prompt: str = "",
