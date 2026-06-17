@@ -51,6 +51,17 @@ export default function JarvisDashboard() {
 
   const { activeSessionId, chatHistory, setChatHistory, addChatHistory } = useStore();
 
+  // Validate session existence
+  useEffect(() => {
+    if (activeSessionId) {
+      fetch(`${DOCKER_API}/api/chats/${activeSessionId}`)
+        .catch(() => {
+          setChatHistory([]);  // Reset if not found
+          localStorage.removeItem('activeSessionId');
+        });
+    }
+  }, [activeSessionId, setChatHistory]);
+
   const sendFeedback = async (msgId:number, rating:number, userMsg:string, assistantMsg:string) => {
     if (feedbackSent[msgId]) return;
     try {
@@ -228,7 +239,19 @@ export default function JarvisDashboard() {
     setIsResponding(false);
   };
 
-  useEffect(() => { chatEndRef.current?.scrollIntoView({behavior:"smooth"}); }, [messages]);
+  useEffect(() => {
+    // Smart scroll: only if user is near bottom (within 100px)
+    const container = chatContainerRef.current;
+    if (container) {
+      const isNearBottom = container.scrollHeight - container.scrollTop - container.clientHeight < 100;
+      if (isNearBottom) {
+        chatEndRef.current?.scrollIntoView({ behavior: "smooth" });
+      }
+    } else {
+      // Fallback if container ref not set yet
+      chatEndRef.current?.scrollIntoView({ behavior: "smooth" });
+    }
+  }, [messages]);
 
   const displayMessages = activeSessionId && chatHistory.length > 0
     ? [{id:0,role:"system",text:"Sistemi ausiliari inizializzati."}, ...chatHistory.map((m,i) => ({id:i+1,role:m.role,text:m.content}))]
@@ -313,10 +336,14 @@ export default function JarvisDashboard() {
                       {msg.role === "system" ? <MarkdownRenderer content={msg.text} /> : msg.text}
                       {msg.role==="system" && prevUser && (
                         <div style={{display:"flex",gap:4,marginTop:4}}>
-                          <span onClick={() => sendFeedback(msg.id,2,prevUser.text,msg.text)}
-                            style={{cursor:"pointer",fontSize:14,color:feedbackSent[msg.id]===2?C.green:C.textFaint,opacity:0.6}}>▲</span>
-                          <span onClick={() => sendFeedback(msg.id,1,prevUser.text,msg.text)}
-                            style={{cursor:"pointer",fontSize:14,color:feedbackSent[msg.id]===1?C.red:C.textFaint,opacity:0.6}}>▼</span>
+                          <span onClick={() => !feedbackSent[msg.id] && sendFeedback(msg.id,2,prevUser.text,msg.text)}
+                            style={{cursor:feedbackSent[msg.id]?"default":"pointer",fontSize:14,color:feedbackSent[msg.id]===2?C.green:C.textFaint,opacity:feedbackSent[msg.id]?0.4:0.6,transition:"all 0.3s"}}>
+                            {feedbackSent[msg.id]===2?"✓":feedbackSent[msg.id]?"":"▲"}
+                          </span>
+                          <span onClick={() => !feedbackSent[msg.id] && sendFeedback(msg.id,1,prevUser.text,msg.text)}
+                            style={{cursor:feedbackSent[msg.id]?"default":"pointer",fontSize:14,color:feedbackSent[msg.id]===1?C.red:C.textFaint,opacity:feedbackSent[msg.id]?0.4:0.6,transition:"all 0.3s"}}>
+                            {feedbackSent[msg.id]===1?"✓":feedbackSent[msg.id]?"":"▼"}
+                          </span>
                         </div>
                       )}
                       {(msg as any).sources?.length > 0 && (
