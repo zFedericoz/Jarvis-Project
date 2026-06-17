@@ -307,6 +307,15 @@ async def chat_text(payload: ChatRequest, request: Request = None):
             return StreamingResponse(_sse_events(r), media_type="text/event-stream")
         return r
 
+    # ── Input length validation
+    MAX_INPUT_LENGTH = 10000
+    combined_length = len(text) + len(file_content)
+    if combined_length > MAX_INPUT_LENGTH:
+        raise HTTPException(
+            status_code=413,
+            detail=f"Input too long: {combined_length} chars (max {MAX_INPUT_LENGTH})"
+        )
+
     if file_content:
         text = f"{text}\n\n[File content]:\n{file_content}" if text else f"[File content]:\n{file_content}"
 
