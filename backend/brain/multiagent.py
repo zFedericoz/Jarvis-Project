@@ -140,8 +140,9 @@ def _toolcall_to_dict(tc) -> dict:
         if isinstance(raw_args, str):
             try:
                 raw_args = json.loads(raw_args)
-            except json.JSONDecodeError:
-                pass
+            except json.JSONDecodeError as e:
+                logger.error(f"Failed to parse tool arguments: {raw_args[:100]}... - {e}")
+                raw_args = {}
         elif hasattr(raw_args, "model_dump"):
             raw_args = raw_args.model_dump()
         elif hasattr(raw_args, "dict"):

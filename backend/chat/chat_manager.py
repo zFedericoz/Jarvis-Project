@@ -5,6 +5,8 @@ import os
 from datetime import datetime, timezone
 from pathlib import Path
 
+from .db_connection import ChatDBConnection
+
 logger = logging.getLogger("jarvis.chat")
 
 DB_PATH = Path("data/chats.db")
@@ -19,10 +21,8 @@ class ChatManager:
         self._init_db()
 
     def _conn(self):
-        conn = sqlite3.connect(str(self._db_path))
-        conn.row_factory = sqlite3.Row
-        conn.execute("PRAGMA foreign_keys = ON")
-        return conn
+        """Get singleton connection from pool."""
+        return ChatDBConnection().get_connection()
 
     def _init_db(self):
         with self._lock, self._conn() as conn:

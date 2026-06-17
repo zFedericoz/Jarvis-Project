@@ -17,23 +17,20 @@ from pathlib import Path
 
 import psutil
 
+from .constants import (
+    MAX_UPLOAD_SIZE, BLOCKED_EXTENSIONS, ALLOWED_EXTENSIONS,
+    MAX_CHAT_REQUESTS_PER_MINUTE, MAX_INPUT_LENGTH,
+)
 from .dependencies import get_config, get_brain, get_speech, get_actions, get_memory, new_context, get_chat_manager
 from .websocket_manager import manager, handle_wake_word, handle_audio_stream
 import skills
 
 logger = logging.getLogger("jarvis.api.routes")
-UPLOAD_DIR = Path("/app/data/uploads")
+UPLOAD_DIR = Path("data/uploads")
 UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
-FEEDBACK_FILE = Path("/app/data/feedback.jsonl")
+FEEDBACK_FILE = Path("data/feedback.jsonl")
 
-# ── Security Constants ────────────────────────────────────────────────────────
-MAX_UPLOAD_SIZE = 50 * 1024 * 1024  # 50 MB
-BLOCKED_EXTENSIONS = {'.env', '.key', '.pem', '.secret', '.db', '.git', '.cfg', '.ini', '.sql', '.pwd', '.pass'}
-ALLOWED_EXTENSIONS = {'.txt', '.pdf', '.md', '.json', '.csv', '.log', '.py', '.js', '.ts', '.jsx', '.tsx',
-                      '.yaml', '.yml', '.rst', '.html', '.css', '.xml', '.toml', '.docx', '.xlsx'}
-
-# ── Rate Limiting Constants ───────────────────────────────────────────────────
-MAX_CHAT_REQUESTS_PER_MINUTE = 10
+# ── Rate Limiting ─────────────────────────────────────────────────────────────
 _chat_request_times: defaultdict[str, deque] = defaultdict(lambda: deque(maxlen=100))
 
 def _check_rate_limit(client_ip: str, max_per_minute: int = MAX_CHAT_REQUESTS_PER_MINUTE) -> bool:
@@ -308,7 +305,6 @@ async def chat_text(payload: ChatRequest, request: Request = None):
         return r
 
     # ── Input length validation
-    MAX_INPUT_LENGTH = 10000
     combined_length = len(text) + len(file_content)
     if combined_length > MAX_INPUT_LENGTH:
         raise HTTPException(
@@ -546,10 +542,14 @@ async def submit_feedback(fb: FeedbackRequest):
         "language": fb.language,
         "intent": fb.intent,
     }
-    with open(FEEDBACK_FILE, "a", encoding="utf-8") as f:
-        f.write(json.dumps(entry, ensure_ascii=False) + "\n")
-    logger.info(f"Feedback: rating={fb.rating}, lang={fb.language}, intent={fb.intent}")
-    return {"status": "saved", "rating": fb.rating}
+    try:
+        with open(FEEDBACK_FILE, "a", encoding="utf-8") as f:
+            f.write(json.dumps(entry, ensure_ascii=False) + "\n")
+        logger.info(f"Feedback: rating={fb.rating}, lang={fb.language}, intent={fb.intent}")
+        return {"status": "saved", "rating": fb.rating}
+    except Exception as e:
+        logger.error(f"Feedback save failed: {e}", exc_info=True)
+        return {"status": "error", "message": str(e)}
 
 
 # ── Step 4: Git API routes ────────────────────────────────────────────────────
