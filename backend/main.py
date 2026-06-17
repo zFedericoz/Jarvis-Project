@@ -5,6 +5,10 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 import uvicorn
 
+from slowapi import Limiter
+from slowapi.util import get_remote_address
+from slowapi.errors import RateLimitExceeded
+
 from api.dependencies import resolve_env, get_config, get_brain, get_speech, get_actions, get_memory, get_chat_manager
 from api.routes import router
 
@@ -14,15 +18,19 @@ logging.basicConfig(
 )
 logger = logging.getLogger("jarvis")
 
+limiter = Limiter(key_func=get_remote_address)
+
 app = FastAPI(title="J.A.R.V.I.S.", version="2.1.0")
+app.state.limiter = limiter
+
 config = get_config()
 
 app.add_middleware(
     CORSMiddleware,
     allow_origins=config["server"]["cors_origins"],
     allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
+    allow_methods=["GET", "POST", "OPTIONS", "DELETE", "PATCH"],
+    allow_headers=["Content-Type", "Authorization"],
 )
 
 app.include_router(router)

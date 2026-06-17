@@ -14,7 +14,7 @@ import json
 import logging
 from pathlib import Path
 from uuid import uuid4
-from datetime import datetime
+from datetime import datetime, timezone
 
 import chromadb
 from chromadb.config import Settings
@@ -57,7 +57,7 @@ class PersistentMemory:
     def store(self, text: str, metadata: dict | None = None, doc_id: str | None = None):
         """Salva un testo (turno di conversazione o fatto) con metadati opzionali."""
         doc_id = doc_id or str(uuid4())
-        meta = {"timestamp": datetime.now().isoformat(), **(metadata or {})}
+        meta = {"timestamp": datetime.now(timezone.utc).isoformat(), **(metadata or {})}
         self.collection.add(documents=[text], metadatas=[meta], ids=[doc_id])
         logger.debug(f"Stored memory [{doc_id}]: {text[:60]}")
 
@@ -107,7 +107,7 @@ class PersistentMemory:
           set_preference("tema_ui", "dark")
         """
         serialized = json.dumps(value, ensure_ascii=False)
-        meta = {"key": key, "updated_at": datetime.now().isoformat()}
+        meta = {"key": key, "updated_at": datetime.now(timezone.utc).isoformat()}
 
         # Upsert: cancella il vecchio valore se esiste
         try:
@@ -187,7 +187,7 @@ class PersistentMemory:
         doc_id = chunk_id or f"rag_{uuid4()}"
         meta = {
             "source": source,
-            "indexed_at": datetime.now().isoformat(),
+            "indexed_at": datetime.now(timezone.utc).isoformat(),
             **(extra_meta or {}),
         }
         self.knowledge.upsert(documents=[text], metadatas=[meta], ids=[doc_id])

@@ -75,7 +75,7 @@ export default function JarvisDashboard() {
     if (d) setMetrics(d as MetricSnapshot);
   }, []);
 
-  useEffect(() => { fetchMetrics(); const id = setInterval(fetchMetrics, 2000); return () => clearInterval(id); }, [fetchMetrics]);
+  useEffect(() => { fetchMetrics(); const id = setInterval(fetchMetrics, 5000); return () => clearInterval(id); }, [fetchMetrics]);
 
   const uploadFile = async (file: File) => {
     const fd = new FormData();

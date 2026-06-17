@@ -48,7 +48,7 @@ import subprocess
 import urllib.request
 import urllib.error
 from pathlib import Path
-from datetime import datetime
+from datetime import datetime, timezone
 
 from .base_action import BaseAction
 
@@ -361,7 +361,7 @@ class RPAAction(BaseAction):
             return "pyautogui non disponibile — non posso fare screenshot."
         try:
             img = gui.screenshot()
-            ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+            ts = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
             path = self._screenshots_dir / f"screenshot_{ts}.png"
             img.save(str(path), quality=self._screenshot_quality)
             logger.info(f"Screenshot salvato: {path}")

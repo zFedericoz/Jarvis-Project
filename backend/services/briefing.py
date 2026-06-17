@@ -18,7 +18,7 @@ Aggiunta in main.py:
 import asyncio
 import logging
 import threading
-from datetime import datetime, time as dt_time
+from datetime import datetime, time as dt_time, timezone
 
 import httpx
 
@@ -79,7 +79,7 @@ class BriefingService:
         last_run_date = None
 
         while True:
-            now = datetime.now()
+            now = datetime.now(timezone.utc)
             target = dt_time(self._hour, self._minute)
             current_t = now.time().replace(second=0, microsecond=0)
 
@@ -110,7 +110,7 @@ class BriefingService:
         saluto_nome = f", {nome.capitalize()}" if nome else ""
 
         # 3. Genera testo briefing via LLM
-        now = datetime.now()
+        now = datetime.now(timezone.utc)
         giorno = now.strftime("%A %d %B %Y")
         ora = now.strftime("%H:%M")
 

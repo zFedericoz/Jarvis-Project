@@ -45,7 +45,7 @@ import asyncio
 import logging
 import subprocess
 import shlex
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from collections import deque
 
@@ -417,7 +417,7 @@ class TerminalAction(BaseAction):
     def _log_entry(self, natural: str, cmd: str, output: str = "",
                    returncode: int = 0, blocked: bool = False, reason: str = ""):
         self._history.append({
-            "timestamp": datetime.now().isoformat(),
+            "timestamp": datetime.now(timezone.utc).isoformat(),
             "natural": natural,
             "command": cmd,
             "output": output[:500],       # salviamo solo i primi 500 char nell'history

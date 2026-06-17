@@ -7,8 +7,9 @@ import platform
 import subprocess
 import re
 import uuid
+import time
 from datetime import datetime, timezone
-from collections import deque
+from collections import deque, defaultdict
 from fastapi import APIRouter, WebSocket, UploadFile, File, Request, HTTPException
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
@@ -30,6 +31,22 @@ MAX_UPLOAD_SIZE = 50 * 1024 * 1024  # 50 MB
 BLOCKED_EXTENSIONS = {'.env', '.key', '.pem', '.secret', '.db', '.git', '.cfg', '.ini', '.sql', '.pwd', '.pass'}
 ALLOWED_EXTENSIONS = {'.txt', '.pdf', '.md', '.json', '.csv', '.log', '.py', '.js', '.ts', '.jsx', '.tsx',
                       '.yaml', '.yml', '.rst', '.html', '.css', '.xml', '.toml', '.docx', '.xlsx'}
+
+# ── Rate Limiting Constants ───────────────────────────────────────────────────
+MAX_CHAT_REQUESTS_PER_MINUTE = 10
+_chat_request_times: defaultdict[str, deque] = defaultdict(lambda: deque(maxlen=100))
+
+def _check_rate_limit(client_ip: str, max_per_minute: int = MAX_CHAT_REQUESTS_PER_MINUTE) -> bool:
+    """Check if client exceeded rate limit (simple IP-based)"""
+    now = time.time()
+    times = _chat_request_times[client_ip]
+    times.append(now)
+
+    # Remove requests older than 1 minute
+    while times and (now - times[0]) > 60:
+        times.popleft()
+
+    return len(times) <= max_per_minute
 
 # ── Pending Actions Store (per azioni pericolose) ─────────────────────────────
 _pending_actions: dict[str, dict] = {}
@@ -103,7 +120,9 @@ def _get_top_processes(limit=5):
     return procs
 
 def _collect_metrics():
-    cpu = psutil.cpu_percent(interval=0.3)
+    # Use non-blocking cpu_percent (interval=None)
+    # First call requires interval for cache initialization
+    cpu = psutil.cpu_percent(interval=None)
     ram = psutil.virtual_memory()
     disk = psutil.disk_usage("/")
     temp = _get_temperature()
@@ -271,6 +290,12 @@ async def websocket_audio(ws: WebSocket):
 
 @router.post("/chat")
 async def chat_text(payload: ChatRequest, request: Request = None):
+    # ── Rate limiting
+    client_ip = request.client.host if request else "unknown"
+    if not _check_rate_limit(client_ip):
+        logger.warning(f"Rate limit exceeded for {client_ip}")
+        raise HTTPException(status_code=429, detail=f"Rate limit: max {MAX_CHAT_REQUESTS_PER_MINUTE} requests/minute")
+
     config = get_config()
     text = payload.text.strip()
     file_content = payload.file_content

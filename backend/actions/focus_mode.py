@@ -32,7 +32,7 @@ import threading
 import subprocess
 import platform
 import logging
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from enum import Enum
 
@@ -113,8 +113,8 @@ class FocusMode:
 
         duration = work_minutes or self._work_min
         self._state = FocusState.WORKING
-        self._session_start = datetime.now()
-        self._phase_end = datetime.now() + timedelta(minutes=duration)
+        self._session_start = datetime.now(timezone.utc)
+        self._phase_end = datetime.now(timezone.utc) + timedelta(minutes=duration)
         self._pomodoro_count += 1
 
         # Blocca siti e silenzia notifiche

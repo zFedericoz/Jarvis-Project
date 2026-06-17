@@ -20,7 +20,7 @@ import http.server
 import subprocess
 import platform
 from pathlib import Path
-from datetime import datetime
+from datetime import datetime, timezone
 
 HOST = "0.0.0.0"
 PORT = 18766
@@ -73,7 +73,7 @@ def _get_gui():
 def _do_screenshot():
     gui = _get_gui()
     img = gui.screenshot()
-    ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+    ts = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
     path = SCREENSHOTS_DIR / f"screenshot_{ts}.png"
     img.save(str(path))
     return {"status": "ok", "result": f"Screenshot salvato: {path}"}
