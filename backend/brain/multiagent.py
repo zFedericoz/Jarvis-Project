@@ -5,13 +5,14 @@ Versione con agentic loop ReAct (Thought → Action → Observation → Repeat �
 Nuove feature:
   1. Tool calling via skill dinamiche (skills/ registry)
   2. ReAct loop multi-step (max_rounds=5)
-  3. Cache semantica per query simili
+  3. Cache semantica per query simili (con TTL + LRU eviction)
   4. Context summarization per chat lunghe (>4000 caratteri di cronologia)
   5. RAG + Web search + User context preserved
 """
 
 import logging, re, json, hashlib
 from duckduckgo_search import DDGS
+from brain.semantic_cache import SemanticCache
 
 logger = logging.getLogger("jarvis.brain.multiagent")
 
@@ -121,7 +122,7 @@ _REFLECTION_INTENTS = {"code", "research", "creative"}
 
 _SUMMARY_THRESHOLD = 4000
 
-_SEMANTIC_CACHE: dict[str, tuple[str, str]] = {}
+_semantic_cache = SemanticCache(max_entries=500, ttl_seconds=3600)
 
 
 def _toolcall_to_dict(tc) -> dict:
@@ -198,18 +199,15 @@ class MultiAgent:
 
     def _check_cache(self, query: str, language: str, intent: str) -> str | None:
         key = self._semantic_cache_key(query, language, intent)
-        hit = _SEMANTIC_CACHE.get(key)
+        hit = _semantic_cache.get(key)
         if hit:
             logger.info(f"Cache HIT per: {query[:60]}")
-            return hit[1]
+            return hit
         return None
 
     def _store_cache(self, query: str, language: str, intent: str, response: str):
         key = self._semantic_cache_key(query, language, intent)
-        _SEMANTIC_CACHE[key] = (query, response)
-        if len(_SEMANTIC_CACHE) > 200:
-            oldest = next(iter(_SEMANTIC_CACHE))
-            del _SEMANTIC_CACHE[oldest]
+        _semantic_cache.set(key, response)
 
     def _maybe_summarize_context(self, context: list[dict] | None) -> list[dict] | str | None:
         if not context:
