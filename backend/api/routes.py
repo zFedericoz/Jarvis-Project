@@ -16,11 +16,24 @@ import psutil
 
 from .dependencies import get_config, get_brain, get_speech, get_actions, get_memory, new_context, get_chat_manager
 from .websocket_manager import manager, handle_wake_word, handle_audio_stream
+import skills
 
 logger = logging.getLogger("jarvis.api.routes")
 UPLOAD_DIR = Path("/app/data/uploads")
 UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
 FEEDBACK_FILE = Path("/app/data/feedback.jsonl")
+
+# ── Pending Actions Store (per azioni pericolose) ─────────────────────────────
+_pending_actions: dict[str, dict] = {}
+
+_DANGEROUS_ACTIONS = {"shutdown", "restart", "lock", "mute", "sleep", "hibernate"}
+
+def _is_dangerous(cmd: str) -> str | None:
+    cmd_lower = cmd.lower()
+    for kw in _DANGEROUS_ACTIONS:
+        if kw in cmd_lower:
+            return kw
+    return None
 
 # ── System Metrics Store ──────────────────────────────────────────────────────
 _metric_history = {
@@ -123,9 +136,23 @@ class ChatResponse(BaseModel):
     audio: str | None = None
     session_id: int | None = None
     sources: list[dict] = []
+    pending_action: str | None = None
+
+class PendingActionInfo(BaseModel):
+    id: str
+    label: str
+    description: str
+    dangerous: bool = True
+
+class ConfirmRequest(BaseModel):
+    action_id: str
+    confirm: bool
 
 async def _sse_events(r: ChatResponse):
-    yield f"data: {json.dumps({'type': 'done', 'response': r.response, 'intent': r.intent, 'language': r.language, 'session_id': r.session_id})}\n\n"
+    d = {'type': 'done', 'response': r.response, 'intent': r.intent, 'language': r.language, 'session_id': r.session_id, 'sources': r.sources}
+    if r.pending_action:
+        d['pending_action'] = r.pending_action
+    yield f"data: {json.dumps(d)}\n\n"
 
 def _abort_response(session_id: int | None, stream: bool):
     r = ChatResponse(response="Richiesta interrotta.", intent="none", language="it", audio=None, session_id=session_id)
@@ -275,12 +302,38 @@ async def chat_text(payload: ChatRequest, request: Request = None):
 
     intent = intent_router.route(original_query)
 
-    if intent in ("git", "terminal", "rpa", "productivity", "system_control", "media_player"):
+    if intent in ("git", "terminal", "rpa", "productivity", "system_control", "media_player", "web_search"):
         if intent == "git":
             repo_path = persistent_memory.get_preference("cartella_progetti")
             response = await actions["git"].execute(original_query, repo_path=repo_path)
             _push_log("info", f"Git: {original_query[:60]}")
+        elif intent == "web_search":
+            try:
+                loop = asyncio.get_event_loop()
+                result = await loop.run_in_executor(None, lambda: skills.execute("web_search", query=original_query))
+                response = f"🔍 Risultati ricerca per '{original_query}':\n{result}"
+            except Exception:
+                web_result, _ = multiagent._search_web(original_query)
+                response = f"🔍 Risultati ricerca:\n{web_result}" if web_result else "Nessun risultato trovato."
         else:
+            dangerous_key = _is_dangerous(original_query) if intent == "system_control" else None
+            if dangerous_key:
+                import uuid
+                action_id = str(uuid.uuid4())
+                _pending_actions[action_id] = {
+                    "command": original_query,
+                    "intent": intent,
+                    "label": dangerous_key,
+                }
+                r = ChatResponse(
+                    response=f"⚠️ Richiesta azione pericolosa: `{dangerous_key}`. Attendo conferma.",
+                    intent=intent, language=lang, audio=None,
+                    session_id=session_id, pending_action=action_id,
+                )
+                if payload.stream:
+                    return StreamingResponse(_sse_events(r), media_type="text/event-stream")
+                return r
+
             response = await actions[intent].execute(original_query)
 
         if request and await request.is_disconnected():
@@ -306,7 +359,8 @@ async def chat_text(payload: ChatRequest, request: Request = None):
                 full_response += token
                 yield f"data: {json.dumps({'type': 'token', 'text': token})}\n\n"
             sources = multiagent.last_sources
-            yield f"data: {json.dumps({'type': 'done', 'response': full_response, 'intent': intent, 'language': lang, 'session_id': session_id, 'sources': sources})}\n\n"
+            done = {'type': 'done', 'response': full_response, 'intent': intent, 'language': lang, 'session_id': session_id, 'sources': sources}
+            yield f"data: {json.dumps(done)}\n\n"
 
             context.add_turn("user", original_query)
             context.add_turn("assistant", full_response)
@@ -336,6 +390,25 @@ async def chat_text(payload: ChatRequest, request: Request = None):
 
     return ChatResponse(response=response, intent=intent, language=lang, audio=None, session_id=session_id, sources=multiagent.last_sources)
 
+
+@router.post("/confirm")
+async def confirm_action(payload: ConfirmRequest):
+    action = _pending_actions.get(payload.action_id)
+    if not action:
+        return {"status": "error", "message": "Azione non trovata o scaduta"}
+
+    if payload.confirm:
+        config = get_config()
+        actions = get_actions(config)
+        intent = action["intent"]
+        if intent in actions:
+            result = await actions[intent].execute(action["command"])
+            del _pending_actions[payload.action_id]
+            return {"status": "ok", "result": result, "action": payload.action_id}
+        return {"status": "error", "message": f"Action handler '{intent}' non trovato"}
+    else:
+        cmd = _pending_actions.pop(payload.action_id, None)
+        return {"status": "cancelled", "message": f"Azione annullata: {cmd['command'] if cmd else '?'}"}
 
 @router.post("/upload", response_model=UploadResponse)
 async def upload_file(file: UploadFile = File(...)):
@@ -1026,3 +1099,47 @@ async def get_chat_messages(session_id: int):
     chat_mgr = get_chat_manager()
     messages = chat_mgr.get_messages(session_id)
     return {"messages": messages}
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# Market Data API routes
+# ══════════════════════════════════════════════════════════════════════════════
+
+@router.get("/market/quote")
+async def market_quote(symbol: str = "AAPL"):
+    loop = asyncio.get_event_loop()
+    result = await loop.run_in_executor(None, lambda: skills.execute("market_data", action="quote", symbol=symbol))
+    try:
+        return json.loads(result)
+    except (json.JSONDecodeError, TypeError):
+        return {"error": result}
+
+
+@router.get("/market/history")
+async def market_history(symbol: str = "AAPL", period: str = "1mo", interval: str = "1d"):
+    loop = asyncio.get_event_loop()
+    result = await loop.run_in_executor(None, lambda: skills.execute("market_data", action="history", symbol=symbol, period=period, interval=interval))
+    try:
+        return json.loads(result)
+    except (json.JSONDecodeError, TypeError):
+        return {"error": result, "data": []}
+
+
+@router.get("/market/search")
+async def market_search(q: str = "Tesla"):
+    loop = asyncio.get_event_loop()
+    result = await loop.run_in_executor(None, lambda: skills.execute("market_data", action="search", query=q))
+    try:
+        return json.loads(result)
+    except (json.JSONDecodeError, TypeError):
+        return {"error": result, "results": []}
+
+
+@router.get("/market/news")
+async def market_news(symbol: str = "AAPL"):
+    loop = asyncio.get_event_loop()
+    result = await loop.run_in_executor(None, lambda: skills.execute("market_data", action="news", symbol=symbol))
+    try:
+        return json.loads(result)
+    except (json.JSONDecodeError, TypeError):
+        return {"error": result}

@@ -1,0 +1,10 @@
+name: get_info
+description: Ottiene informazioni di sistema (CPU, RAM, disco, processi, rete)
+parameters:
+  type: object
+  properties:
+    type:
+      type: string
+      description: "Tipo di informazione: cpu, ram, disk, all, processes"
+      enum: [cpu, ram, disk, all, processes]
+  required: [type]

@@ -37,12 +37,14 @@ def get_config():
 def get_brain(config):
     global _brain
     if _brain is None:
+        import skills
+        skills.init()
         from brain.llm_client import LLMClient
         from brain.multiagent import MultiAgent
         from brain.intent_router import IntentRouter
         _, persistent_memory = get_memory(config)
         llm = LLMClient(config)
-        _brain = (llm, IntentRouter(), MultiAgent(llm, persistent_memory))
+        _brain = (llm, IntentRouter(), MultiAgent(llm, persistent_memory, skills_registry=skills))
     return _brain
 
 

@@ -1,0 +1,9 @@
+name: web_search
+description: Cerca informazioni aggiornate sul web usando DuckDuckGo. Usa quando l'utente chiede notizie, meteo, prezzi, attualità o qualsiasi info che richiede dati recenti.
+parameters:
+  type: object
+  properties:
+    query:
+      type: string
+      description: La query di ricerca testuale
+  required: [query]

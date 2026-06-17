@@ -1,0 +1,12 @@
+name: git
+description: Esegue operazioni Git (status, log, diff, commit, branch).
+parameters:
+  type: object
+  properties:
+    command:
+      type: string
+      description: "Comando git testuale (es. 'status', 'ultimi 5 commit', 'committa tutto')"
+    repo_path:
+      type: string
+      description: "Percorso repository (opzionale, default dalla configurazione)"
+  required: [command]

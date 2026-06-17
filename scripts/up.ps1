@@ -13,49 +13,81 @@ $root = Split-Path -Parent $PSScriptRoot
 Write-Host "=== J.A.R.V.I.S. Docker Launcher ===" -ForegroundColor Cyan
 Write-Host ""
 
-$pythonPath = (Get-Command python).Source
-Write-Host "  Python: $pythonPath" -ForegroundColor Gray
+# ── Detect host Python (skip MS Store stub) ─────────────────────────────────
+$pythonPath = $null
+$pythonCandidates = @(
+    "$env:LOCALAPPDATA\Programs\Python\Python314\python.exe",
+    "$env:LOCALAPPDATA\Programs\Python\Python312\python.exe",
+    "C:\Program Files\Python313\python.exe",
+    "C:\Program Files\Python312\python.exe",
+    "C:\Program Files\Python311\python.exe",
+    "C:\Python313\python.exe",
+    "C:\Python312\python.exe"
+)
+foreach ($candidate in $pythonCandidates) {
+    if (Test-Path $candidate) {
+        $pythonPath = $candidate
+        break
+    }
+}
+
+if (-not $pythonPath) {
+    Write-Host "  Python host non trovato (serve per metriche/RPA host)." -ForegroundColor DarkYellow
+    Write-Host "  I container Docker funzionano comunque." -ForegroundColor DarkYellow
+} else {
+    Write-Host "  Python: $pythonPath" -ForegroundColor Gray
+}
 
 # ── 1. Start Host Metrics Server ──────────────────────────────────────────────
 Write-Host "[1/4] Avvio Host Metrics Server..." -ForegroundColor Yellow
 
-$metricsJob = Start-Job -Name "HostMetrics" -ScriptBlock {
-    param($py, $dir)
-    Set-Location $dir
-    & $py host_metrics_server.py
-} -ArgumentList $pythonPath, (Join-Path $root "backend")
+$metricsJob = $null
+if ($pythonPath) {
+    $metricsJob = Start-Job -Name "HostMetrics" -ScriptBlock {
+        param($py, $dir)
+        Set-Location $dir
+        & $py host_metrics_server.py
+    } -ArgumentList $pythonPath, (Join-Path $root "backend")
 
-Start-Sleep -Seconds 3
-$ms = Get-Job -Name "HostMetrics" -ErrorAction SilentlyContinue
+    Start-Sleep -Seconds 3
+    $ms = Get-Job -Name "HostMetrics" -ErrorAction SilentlyContinue
 
-if ($ms.State -eq 'Running') {
-    Write-Host "  OK - http://localhost:18765" -ForegroundColor Green
+    if ($ms.State -eq 'Running') {
+        Write-Host "  OK - http://localhost:18765" -ForegroundColor Green
+    } else {
+        Write-Host "  ERRORE:" -ForegroundColor Red
+        $ms | Receive-Job -ErrorAction SilentlyContinue | ForEach-Object { Write-Host "    $_" -ForegroundColor Red }
+        $ms | Remove-Job -Force -ErrorAction SilentlyContinue
+        $metricsJob = $null
+    }
 } else {
-    Write-Host "  ERRORE:" -ForegroundColor Red
-    $ms | Receive-Job -ErrorAction SilentlyContinue | ForEach-Object { Write-Host "    $_" -ForegroundColor Red }
-    $ms | Remove-Job -Force -ErrorAction SilentlyContinue
-    $metricsJob = $null
+    Write-Host "  Skipped (Python host non disponibile)" -ForegroundColor DarkYellow
 }
 
 # ── 2. Start Host RPA Server ──────────────────────────────────────────────────
 Write-Host "[2/4] Avvio Host RPA Server..." -ForegroundColor Yellow
 
-$rpaJob = Start-Job -Name "HostRPA" -ScriptBlock {
-    param($py, $dir)
-    Set-Location $dir
-    & $py host_rpa_server.py
-} -ArgumentList $pythonPath, (Join-Path $root "backend")
+$rpaJob = $null
+if ($pythonPath) {
+    $rpaJob = Start-Job -Name "HostRPA" -ScriptBlock {
+        param($py, $dir)
+        Set-Location $dir
+        & $py host_rpa_server.py
+    } -ArgumentList $pythonPath, (Join-Path $root "backend")
 
-Start-Sleep -Seconds 2
-$rpa = Get-Job -Name "HostRPA" -ErrorAction SilentlyContinue
+    Start-Sleep -Seconds 2
+    $rpa = Get-Job -Name "HostRPA" -ErrorAction SilentlyContinue
 
-if ($rpa.State -eq 'Running') {
-    Write-Host "  OK - http://localhost:18766" -ForegroundColor Green
+    if ($rpa.State -eq 'Running') {
+        Write-Host "  OK - http://localhost:18766" -ForegroundColor Green
+    } else {
+        Write-Host "  ERRORE:" -ForegroundColor Red
+        $rpa | Receive-Job -ErrorAction SilentlyContinue | ForEach-Object { Write-Host "    $_" -ForegroundColor Red }
+        $rpa | Remove-Job -Force -ErrorAction SilentlyContinue
+        $rpaJob = $null
+    }
 } else {
-    Write-Host "  ERRORE:" -ForegroundColor Red
-    $rpa | Receive-Job -ErrorAction SilentlyContinue | ForEach-Object { Write-Host "    $_" -ForegroundColor Red }
-    $rpa | Remove-Job -Force -ErrorAction SilentlyContinue
-    $rpaJob = $null
+    Write-Host "  Skipped (Python host non disponibile)" -ForegroundColor DarkYellow
 }
 
 # ── 3. Start Docker containers ────────────────────────────────────────────────

@@ -1,48 +1,28 @@
 """
-MultiAgent — orchestratore delle risposte di J.A.R.V.I.S.  (versione potenziata)
+MultiAgent — orchestratore delle risposte di J.A.R.V.I.S.
+Versione con agentic loop ReAct (Thought → Action → Observation → Repeat → Final).
 
-Sostituisce integralmente backend/brain/multiagent.py
-
-Miglioramenti rispetto alla versione originale:
-  1. RAG sempre attivo con soglia di rilevanza (distance threshold) invece di
-     pattern-matching fragile. Elimina il rischio di false negative.
-  2. Context budget: tronca RAG e web results a un numero massimo di token
-     stimato per non sforare il context_window di Qwen 2.5:14b (4096 token).
-  3. Formato RAG migliorato: ogni chunk include nome sorgente e indice chunk
-     così il modello può citare "[da: file.pdf §3]" con precisione.
-  4. Web search condizionale più precisa: evita ricerche inutili per domande
-     già coperte dal RAG o dalla memoria locale.
-  5. Reflection abilitata di default (max_reflect_rounds=1) per intent
-     "code" e "research" dove la qualità è prioritaria.
-  6. Logging strutturato per diagnosticare facilmente cosa viene iniettato.
+Nuove feature:
+  1. Tool calling via skill dinamiche (skills/ registry)
+  2. ReAct loop multi-step (max_rounds=5)
+  3. Cache semantica per query simili
+  4. Context summarization per chat lunghe (>4000 caratteri di cronologia)
+  5. RAG + Web search + User context preserved
 """
 
-import logging
-import re
+import logging, re, json, hashlib
 from duckduckgo_search import DDGS
 
 logger = logging.getLogger("jarvis.brain.multiagent")
 
-# ─── Mapping intent → categoria specialista ────────────────────────────────
 INTENT_TO_SPECIALIST = {
-    "system_control": "action",
-    "web_search":     "research",
-    "media_player":   "action",
-    "productivity":   "action",
-    "vision":         "action",
-    "greeting":       "general",
-    "chat":           "general",
-    "code":           "code",
-    "creative":       "creative",
-    "research":       "research",
-    "action":         "action",
-    "general":        "general",
-    "git":            "code",
-    "terminal":       "action",
-    "rpa":            "action",
+    "system_control": "action", "web_search": "research", "media_player": "action",
+    "productivity": "action", "vision": "action", "greeting": "general",
+    "chat": "general", "code": "code", "creative": "creative",
+    "research": "research", "action": "action", "general": "general",
+    "git": "code", "terminal": "action", "rpa": "action",
 }
 
-# ─── Prompt specialisti (italiano) ─────────────────────────────────────────
 SPECIALIST_PROMPTS_IT = {
     "code": """
 Sei uno specialista di codice. Regole:
@@ -82,7 +62,6 @@ Sei un assistente generale. Regole:
 """,
 }
 
-# ─── Prompt specialisti (inglese) ──────────────────────────────────────────
 SPECIALIST_PROMPTS_EN = {
     "code": """
 You are a code specialist. Rules:
@@ -122,7 +101,6 @@ You are a general assistant. Rules:
 """,
 }
 
-# ─── Pattern per web search ─────────────────────────────────────────────────
 NEED_SEARCH_PATTERNS = [
     r"\b(notizie|ultime|news|breaking|aggiornament)\b",
     r"\b(meteo|tempo|che tempo|previsioni)\b",
@@ -133,39 +111,51 @@ NEED_SEARCH_PATTERNS = [
     r"\b(today|latest|current|now|breaking)\b",
 ]
 
-# ─── Costanti per il budget del contesto ───────────────────────────────────
-# Stima conservativa: 1 token ≈ 4 caratteri.
-# Context window Qwen 2.5:14b = 4096 token → ~16 384 caratteri.
-# Riserviamo ~2500 token per system prompt + risposta → budget extra ~1500 token.
 _CHARS_PER_TOKEN = 4
-_RAG_TOKEN_BUDGET = 1200     # token massimi da dedicare al RAG
-_WEB_TOKEN_BUDGET = 600      # token massimi per i risultati web
-_RAG_CHAR_BUDGET  = _RAG_TOKEN_BUDGET * _CHARS_PER_TOKEN
-_WEB_CHAR_BUDGET  = _WEB_TOKEN_BUDGET * _CHARS_PER_TOKEN
-
-# Soglia di distanza ChromaDB sotto la quale un chunk è considerato rilevante.
-# ChromaDB usa distanza coseno: 0.0 = identico, 2.0 = opposto.
-# Valori < 1.2 sono generalmente buoni; abbassa a 0.9 per maggiore precisione.
+_RAG_TOKEN_BUDGET = 1200
+_WEB_TOKEN_BUDGET = 600
+_RAG_CHAR_BUDGET = _RAG_TOKEN_BUDGET * _CHARS_PER_TOKEN
+_WEB_CHAR_BUDGET = _WEB_TOKEN_BUDGET * _CHARS_PER_TOKEN
 _RAG_DISTANCE_THRESHOLD = 1.2
-
-# Intent che beneficiano della reflection (qualità > velocità)
 _REFLECTION_INTENTS = {"code", "research", "creative"}
+
+_SUMMARY_THRESHOLD = 4000
+
+_SEMANTIC_CACHE: dict[str, tuple[str, str]] = {}
+
+
+def _toolcall_to_dict(tc) -> dict:
+    if isinstance(tc, dict):
+        return tc
+    if hasattr(tc, "function"):
+        fn = tc.function
+        if hasattr(fn, "name"):
+            name = fn.name
+        elif hasattr(fn, "get"):
+            name = fn.get("name", "")
+        else:
+            name = str(fn)
+        raw_args = getattr(fn, "arguments", {})
+        if isinstance(raw_args, str):
+            try:
+                raw_args = json.loads(raw_args)
+            except json.JSONDecodeError:
+                pass
+        elif hasattr(raw_args, "model_dump"):
+            raw_args = raw_args.model_dump()
+        elif hasattr(raw_args, "dict"):
+            raw_args = raw_args.dict()
+        return {"function": {"name": name, "arguments": raw_args}}
+    return {"function": {"name": tc.get("function", {}).get("name", str(tc)), "arguments": {}}}
 
 
 class MultiAgent:
-    def __init__(self, llm_client, persistent_memory=None):
-        """
-        Args:
-            llm_client:        istanza LLMClient
-            persistent_memory: istanza PersistentMemory (opzionale)
-        """
-        self.llm  = llm_client
+    def __init__(self, llm_client, persistent_memory=None, skills_registry=None):
+        self.llm = llm_client
         self._mem = persistent_memory
+        self._skills = skills_registry
         self._last_sources: list[dict] = []
-
-    # ──────────────────────────────────────────────────────────────────────────
-    # Mapping e selezione specialista
-    # ──────────────────────────────────────────────────────────────────────────
+        self._max_react_rounds = 5
 
     def _map_intent(self, intent: str) -> str:
         return INTENT_TO_SPECIALIST.get(intent, "general")
@@ -174,92 +164,107 @@ class MultiAgent:
         prompts = SPECIALIST_PROMPTS_IT if language == "it" else SPECIALIST_PROMPTS_EN
         return prompts.get(category, prompts["general"])
 
-    # ──────────────────────────────────────────────────────────────────────────
-    # RAG: ricerca nella knowledge base con soglia di rilevanza
-    # ──────────────────────────────────────────────────────────────────────────
+    def _react_system_prompt(self, language: str = "it") -> str:
+        if language == "it":
+            return (
+                "Hai a disposizione degli strumenti (tools) che puoi chiamare per ottenere informazioni o eseguire azioni.\n\n"
+                "REGOLA FONDAMENTALE: Chiama un tool SOLO SE strettamente necessario. "
+                "Per domande semplici (saluti, opinione, definizioni, spiegazioni), rispondi direttamente senza usare tools.\n\n"
+                "Quando usi un tool:\n"
+                "1. Thought: ragiona brevemente su cosa serve fare\n"
+                "2. Action: chiama il tool con i parametri corretti\n"
+                "3. Observation: arriverà il risultato del tool\n"
+                "4. Ripeti se necessario, poi dai la risposta finale\n\n"
+                "Non chiamare mai lo stesso tool due volte con la stessa richiesta.\n"
+                "Se un tool restituisce un errore, prova un approccio alternativo o informa l'utente.\n"
+                "Non inventare risultati di tool mai chiamati."
+            )
+        return (
+            "You have access to tools you can call to get information or perform actions.\n\n"
+            "RULE: Only call a tool when strictly necessary. "
+            "For simple questions (greetings, opinions, definitions, explanations), answer directly without tools.\n\n"
+            "When using a tool:\n"
+            "1. Thought: reason briefly about what is needed\n"
+            "2. Action: call the tool with correct parameters\n"
+            "3. Observation: the tool result will arrive\n"
+            "4. Repeat if needed, then give the final answer\n\n"
+            "Never call the same tool twice with the same request.\n"
+            "If a tool returns an error, try an alternative or inform the user.\n"
+            "Do not invent tool results for tools you never called."
+        )
+
+    def _semantic_cache_key(self, query: str, language: str, intent: str) -> str:
+        return hashlib.md5(f"{query}|{language}|{intent}".encode()).hexdigest()
+
+    def _check_cache(self, query: str, language: str, intent: str) -> str | None:
+        key = self._semantic_cache_key(query, language, intent)
+        hit = _SEMANTIC_CACHE.get(key)
+        if hit:
+            logger.info(f"Cache HIT per: {query[:60]}")
+            return hit[1]
+        return None
+
+    def _store_cache(self, query: str, language: str, intent: str, response: str):
+        key = self._semantic_cache_key(query, language, intent)
+        _SEMANTIC_CACHE[key] = (query, response)
+        if len(_SEMANTIC_CACHE) > 200:
+            oldest = next(iter(_SEMANTIC_CACHE))
+            del _SEMANTIC_CACHE[oldest]
+
+    def _maybe_summarize_context(self, context: list[dict] | None) -> list[dict] | str | None:
+        if not context:
+            return context
+        total_chars = sum(len(m.get("content", "")) for m in context)
+        if total_chars <= _SUMMARY_THRESHOLD:
+            return context
+        texts = [f"{m['role']}: {m['content'][:500]}" for m in context[-10:]]
+        return "\n".join(texts)
 
     def _search_rag(self, query: str) -> str:
-        """
-        Cerca nella knowledge base.
-        Filtra i chunk con distanza coseno > _RAG_DISTANCE_THRESHOLD per
-        evitare di iniettare contenuto non pertinente nel prompt.
-        Tronca il risultato al budget di caratteri configurato.
-        """
         if not self._mem:
             return ""
-
         count = self._mem.knowledge.count()
         if count == 0:
             return ""
-
-        n_results = min(6, count)  # recupera più chunk, poi filtra
+        n_results = min(6, count)
         try:
             raw = self._mem.knowledge.query(
-                query_texts=[query],
-                n_results=n_results,
+                query_texts=[query], n_results=n_results,
                 include=["documents", "metadatas", "distances"],
             )
         except Exception as e:
             logger.warning(f"RAG query fallita: {e}")
             return ""
-
-        docs      = raw.get("documents",  [[]])[0]
-        metas     = raw.get("metadatas",  [[]])[0]
-        distances = raw.get("distances",  [[]])[0]
-
+        docs = raw.get("documents", [[]])[0]
+        metas = raw.get("metadatas", [[]])[0]
+        distances = raw.get("distances", [[]])[0]
         if not docs:
             return ""
-
-        # Filtra per rilevanza
-        relevant = [
-            (doc, meta, dist)
-            for doc, meta, dist in zip(docs, metas, distances)
-            if dist <= _RAG_DISTANCE_THRESHOLD
-        ]
-
+        relevant = [(d, m, dist) for d, m, dist in zip(docs, metas, distances) if dist <= _RAG_DISTANCE_THRESHOLD]
         if not relevant:
-            logger.info(f"RAG: nessun chunk rilevante (threshold={_RAG_DISTANCE_THRESHOLD}) per '{query[:60]}'")
             return ""
-
-        logger.info(f"RAG: {len(relevant)}/{n_results} chunk rilevanti per '{query[:60]}'")
-
-        # Formatta con fonte e indice chunk per facilitare la citazione
         lines = ["# Documenti rilevanti dalla knowledge base"]
         total_chars = len(lines[0])
-
         for doc, meta, dist in relevant:
-            source      = meta.get("source", "sconosciuto")
-            chunk_index = meta.get("chunk_index", "?")
-            header      = f"\n[da: {source} §{chunk_index}] (rilevanza: {1 - dist / 2:.0%})"
-            entry       = f"{header}\n{doc}"
-
+            source = meta.get("source", "sconosciuto")
+            ci = meta.get("chunk_index", "?")
+            h = f"\n[da: {source} §{ci}] (rilevanza: {1 - dist / 2:.0%})"
+            entry = f"{h}\n{doc}"
             if total_chars + len(entry) > _RAG_CHAR_BUDGET:
-                logger.info("RAG: budget caratteri raggiunto, chunk successivi scartati")
                 break
-
             lines.append(entry)
             total_chars += len(entry)
-
         return "\n".join(lines)
-
-    # ──────────────────────────────────────────────────────────────────────────
-    # Web search
-    # ──────────────────────────────────────────────────────────────────────────
 
     def _needs_web_search(self, message: str) -> bool:
         return any(re.search(p, message.lower()) for p in NEED_SEARCH_PATTERNS)
 
     def _search_web(self, query: str, max_results: int = 4):
-        """Esegue una ricerca DuckDuckGo.
-        Returns:
-            (text_for_llm, sources_list) — sources_list è una lista di dict con 'title' e 'url'.
-        """
         try:
             with DDGS() as ddgs:
                 results = list(ddgs.text(query, max_results=max_results))
             if not results:
                 return ("", [])
-
             lines = []
             sources = []
             total = 0
@@ -274,38 +279,23 @@ class MultiAgent:
                 total += len(snippet)
                 if url:
                     sources.append({"title": title or url, "url": url})
-
             return ("\n".join(lines), sources)
         except Exception as e:
             logger.warning(f"Web search fallita: {e}")
             return ("", [])
 
-    # ──────────────────────────────────────────────────────────────────────────
-    # Contesto utente da memoria persistente
-    # ──────────────────────────────────────────────────────────────────────────
-
     def _user_context(self) -> str:
         if not self._mem:
             return ""
-        ctx = self._mem.build_user_context_string()
-        return ctx
-
-    # ──────────────────────────────────────────────────────────────────────────
-    # Entry point principale
-    # ──────────────────────────────────────────────────────────────────────────
+        return self._mem.build_user_context_string()
 
     @property
     def last_sources(self) -> list[dict]:
         return self._last_sources
 
-    def chat(
-        self,
-        message: str,
-        context: list[dict] | None = None,
-        language: str = "it",
-        intent: str = "general",
-        search_query: str | None = None,
-    ) -> str:
+    def chat(self, message: str, context: list[dict] | None = None,
+             language: str = "it", intent: str = "general",
+             search_query: str | None = None) -> str:
         self._last_sources = []
         return "".join(self._chat_stream_impl(message, context, language, intent, search_query, use_reflection=intent in _REFLECTION_INTENTS))
 
@@ -319,47 +309,139 @@ class MultiAgent:
                           language: str = "it", intent: str = "general",
                           search_query: str | None = None,
                           use_reflection: bool = False):
-        category   = self._map_intent(intent)
-        specialist = self._specialist_prompt(category, language)
-        query      = search_query or message
-        extra_parts: list[str] = []
+        cache_hit = self._check_cache(message, language, intent)
+        if cache_hit:
+            yield cache_hit
+            return
 
-        # 1. Contesto utente (preferenze persistenti)
+        category = self._map_intent(intent)
+        specialist = self._specialist_prompt(category, language)
+        query = search_query or message
+        extra_parts = []
+
         user_ctx = self._user_context()
         if user_ctx:
             extra_parts.append(user_ctx)
 
-        # 2. RAG — sempre attivo, filtrato per rilevanza
         rag_ctx = self._search_rag(query)
         if rag_ctx:
             extra_parts.append(rag_ctx)
 
-        # 3. Web search
         rag_already_covers = bool(rag_ctx)
         if self._needs_web_search(query) and not rag_already_covers:
             logger.info(f"Web search attivata per: {query[:80]}")
             web_results = self._search_web(query)
             if web_results[0]:
-                extra_parts.append(
-                    "Risultati web (usa solo se pertinenti, ignora altrimenti):\n"
-                    + web_results[0]
-                )
+                extra_parts.append("Risultati web (usa solo se pertinenti, ignora altrimenti):\n" + web_results[0])
                 self._last_sources = web_results[1]
             else:
                 self._last_sources = []
+
+        tools = None
+        if self._skills:
+            react_sys = self._react_system_prompt(language)
+            tools = self._skills.get_ollama_tools()
 
         full_specialist = specialist
         if extra_parts:
             full_specialist = specialist + "\n\n" + "\n\n".join(extra_parts)
 
+        if tools:
+            full_specialist = react_sys + "\n\n" + full_specialist
+
+        context_for_llm = self._maybe_summarize_context(context)
+        if isinstance(context_for_llm, str):
+            full_specialist += "\n\n# Riassunto cronologia chat\n" + context_for_llm
+            context_for_llm = None
+
+        if tools:
+            yield from self._react_loop(message, context_for_llm, language, full_specialist, tools)
+            return
+
         if use_reflection:
-            yield self.llm.chat_with_reflection(
-                message, context, language,
-                extra_system_prompt=full_specialist,
-                min_score=7, max_reflect_rounds=1,
-            )
+            result = self.llm.chat_with_reflection(message, context_for_llm, language, extra_system_prompt=full_specialist, min_score=7, max_reflect_rounds=1)
+            self._store_cache(message, language, intent, result)
+            yield result
         else:
-            yield from self.llm.chat_stream(
-                message, context, language,
-                extra_system_prompt=full_specialist,
+            result_chars = []
+            for kind, data in self.llm.chat_stream(message, context_for_llm, language, extra_system_prompt=full_specialist):
+                if kind == "token":
+                    result_chars.append(data)
+                    yield data
+            final = "".join(result_chars)
+            self._store_cache(message, language, intent, final)
+
+    def _react_loop(self, message: str, context: list[dict] | None,
+                    language: str, system_prompt: str, tools: list[dict]):
+        messages = [{"role": "system", "content": system_prompt}]
+        if context:
+            messages.extend(context)
+        messages.append({"role": "user", "content": message})
+
+        all_tool_calls_ever = set()
+
+        for round_idx in range(self._max_react_rounds):
+            stream = self.llm.client.chat(
+                model=self.llm.model,
+                messages=messages,
+                tools=tools,
+                options=self.llm._options(),
+                keep_alive=-1,
+                stream=True,
             )
+
+            text_buffer = []
+            tool_calls_batch = []
+
+            for chunk in stream:
+                msg = chunk.get("message", {})
+                content = msg.get("content", "")
+                tc = msg.get("tool_calls", None)
+                if content:
+                    text_buffer.append(content)
+                if tc:
+                    for call in tc:
+                        call_dict = _toolcall_to_dict(call)
+                        tc_key = json.dumps(call_dict, sort_keys=True)
+                        if tc_key not in all_tool_calls_ever:
+                            all_tool_calls_ever.add(tc_key)
+                            tool_calls_batch.append(call)
+
+            assistant_text = "".join(text_buffer)
+
+            if tool_calls_batch:
+                tool_calls_dicts = [_toolcall_to_dict(tc) for tc in tool_calls_batch]
+                assistant_msg = {"role": "assistant", "content": assistant_text, "tool_calls": tool_calls_dicts}
+                messages.append(assistant_msg)
+
+                for tc in tool_calls_batch:
+                    tc_dict = _toolcall_to_dict(tc)
+                    fn = tc_dict.get("function", tc_dict) if isinstance(tc_dict, dict) else {}
+                    name = fn.get("name", "")
+                    args_raw = fn.get("arguments", {})
+                    if isinstance(args_raw, str):
+                        try:
+                            args_raw = json.loads(args_raw)
+                        except json.JSONDecodeError:
+                            args_raw = {}
+                    logger.info(f"ReAct round {round_idx + 1}: chiamata tool '{name}' con {args_raw}")
+                    if assistant_text:
+                        yield assistant_text
+                        assistant_text = ""
+                    result = self._skills.execute(name, **args_raw) if self._skills else f"Skills non disponibili"
+                    logger.info(f"ReAct round {round_idx + 1}: tool '{name}' -> {result[:100]}...")
+                    messages.append({"role": "tool", "content": result})
+            else:
+                if assistant_text:
+                    yield assistant_text
+                return
+
+        messages.append({"role": "user", "content": "Fornisci la risposta finale basata sulle osservazioni raccolte. Sii conciso."})
+        stream = self.llm.client.chat(
+            model=self.llm.model, messages=messages,
+            options=self.llm._options(), keep_alive=-1, stream=True,
+        )
+        for chunk in stream:
+            c = chunk.get("message", {}).get("content", "")
+            if c:
+                yield c

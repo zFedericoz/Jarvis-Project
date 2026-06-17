@@ -4,14 +4,15 @@
 
 llm:
   provider: ollama
-  # model: qwen3:8b # commentare se si vuole utilizzare un modello più avanzato
-  model: qwen3:30b-a3b # scommentare per utilizzare un modello più avanzato (richiede ~8-10 GB di VRAM con GPU dedicata) - su terminale -> ollama pull qwen3:30b-a3b
-  # reflection_model: qwen2.5:14b  # scommenta per usare un modello diverso per auto-valutazione
+  # qwen3:8b — fallback, modello leggero (5.2 GB)
+  # qwen3:30b-a3b — 18 GB, richiede GPU dedicata
+  model: qwen3.5:4b     # nuovo modello consigliato (3.4 GB) — bilancia qualità e risorse
+  reflection_model: qwen3.5:4b
   embedding_model: mxbai-embed-large
   host: ${OLLAMA_HOST:-http://localhost:11434}
   temperature: 0.1
-  context_window: 4096
-  num_gpu: -1           # -1 = auto (usa GPU se disponibile), 0 = CPU, N = numero layers GPU
+  context_window: 8192   # aumentato per sfruttare la finestra di qwen3.5
+  num_gpu: -1            # -1 = auto (usa GPU se disponibile), 0 = CPU, N = numero layers GPU
 
 speech:
   stt:

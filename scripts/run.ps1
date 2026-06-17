@@ -8,10 +8,33 @@ $root = Split-Path -Parent $PSScriptRoot
 
 Write-Host "=== J.A.R.V.I.S. Launcher ===" -ForegroundColor Cyan
 
-$pythonPath = (Get-Command python).Source
 $backendDir = Join-Path $root "backend"
 
-if (-not $NoMetrics) {
+# ── Detect host Python (skip MS Store stub) ─────────────────────────────────
+$pythonPath = $null
+$pythonCandidates = @(
+    "$env:LOCALAPPDATA\Programs\Python\Python314\python.exe",
+    "$env:LOCALAPPDATA\Programs\Python\Python312\python.exe",
+    "C:\Program Files\Python313\python.exe",
+    "C:\Program Files\Python312\python.exe",
+    "C:\Program Files\Python311\python.exe",
+    "C:\Python313\python.exe",
+    "C:\Python312\python.exe"
+)
+foreach ($candidate in $pythonCandidates) {
+    if (Test-Path $candidate) {
+        $pythonPath = $candidate
+        break
+    }
+}
+
+if ($pythonPath) {
+    Write-Host "  Python: $pythonPath" -ForegroundColor Gray
+} else {
+    Write-Host "  Python host non trovato, metriche/RPA host disabilitati." -ForegroundColor DarkYellow
+}
+
+if (-not $NoMetrics -and $pythonPath) {
     Write-Host "Avvio Host Metrics Server (metriche reali del PC)..." -ForegroundColor Yellow
     $metricsJob = Start-Job -Name "HostMetrics" -ScriptBlock {
         param($py, $dir)
@@ -28,6 +51,8 @@ if (-not $NoMetrics) {
         Remove-Job -Name "HostMetrics" -Force -ErrorAction SilentlyContinue
         $metricsJob = $null
     }
+} elseif (-not $NoMetrics) {
+    Write-Host "Host Metrics: Skipped (Python host non disponibile)" -ForegroundColor DarkYellow
 }
 
 if (-not $NoBackend) {

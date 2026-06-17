@@ -1,12 +1,13 @@
 """
-Patch per LLMClient — aggiunge il parametro `system_override` al metodo `chat`.
+LLMClient — supporto tools Ollama per skill chiamanti + streaming tool_calls.
 
-Sostituisce completamente llm_client.py. Unica modifica rispetto all'originale:
-  - `chat()` accetta `system_override: str | None = None`
-    Se fornito, sostituisce interamente il system prompt (invece di appendere).
-    Usato da GitAction per il prompt specializzato dei commit message.
+Aggiunte rispetto alla versione base:
+  - `chat()` e `chat_stream()` accettano `tools: list[dict] | None`
+  - `chat_stream()` può restituire tuple (`type`, `data`) per distinguere
+    token di testo da chiamate tool.
 """
 
+import json
 import yaml
 import ollama
 import logging
@@ -49,40 +50,43 @@ class LLMClient:
 
     def chat(self, message: str, context: list[dict] | None = None, language: str = "it",
              extra_system_prompt: str = "",
-             system_override: str | None = None) -> str:
+             system_override: str | None = None,
+             tools: list[dict] | None = None) -> tuple[str, list[dict]]:
         messages = self._build_messages(
             message, context, language, extra_system_prompt, system_override
         )
-        resp = self.client.chat(
-            model=self.model,
-            messages=messages,
-            options=self._options(),
-            keep_alive=-1,
-        )
-        return resp["message"]["content"]
+        kwargs = dict(model=self.model, messages=messages, options=self._options(), keep_alive=-1)
+        if tools:
+            kwargs["tools"] = tools
+        resp = self.client.chat(**kwargs)
+        content = resp["message"].get("content", "")
+        tool_calls = resp["message"].get("tool_calls", [])
+        return content, tool_calls
 
     def chat_stream(self, message: str, context: list[dict] | None = None, language: str = "it",
                     extra_system_prompt: str = "",
-                    system_override: str | None = None):
+                    system_override: str | None = None,
+                    tools: list[dict] | None = None):
         messages = self._build_messages(
             message, context, language, extra_system_prompt, system_override
         )
-        stream = self.client.chat(
-            model=self.model,
-            messages=messages,
-            options=self._options(),
-            keep_alive=-1,
-            stream=True,
-        )
+        kwargs = dict(model=self.model, messages=messages, options=self._options(), keep_alive=-1, stream=True)
+        if tools:
+            kwargs["tools"] = tools
+        stream = self.client.chat(**kwargs)
         for chunk in stream:
-            content = chunk.get("message", {}).get("content", "")
+            msg = chunk.get("message", {})
+            content = msg.get("content", "")
+            tc = msg.get("tool_calls", None)
             if content:
-                yield content
+                yield ("token", content)
+            if tc:
+                yield ("tool_calls", tc)
 
     def chat_with_reflection(self, message: str, context: list[dict] | None = None,
                               language: str = "it", extra_system_prompt: str = "",
                               min_score: int = 7, max_reflect_rounds: int = 1) -> str:
-        response = self.chat(message, context, language, extra_system_prompt)
+        response, _ = self.chat(message, context, language, extra_system_prompt)
 
         for _ in range(max_reflect_rounds):
             score = self._rate_response(message, response, language)
