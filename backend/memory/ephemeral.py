@@ -1,5 +1,6 @@
 import json
 import logging
+import os
 from pathlib import Path
 
 logger = logging.getLogger("jarvis.memory.ephemeral")
@@ -14,9 +15,17 @@ class EphemeralMemory:
             self._ttl = mem_cfg.get("ttl", 3600)
             host = mem_cfg.get("host", "localhost")
             port = mem_cfg.get("port", 6379)
+            password = os.getenv("REDIS_PASSWORD")  # Get from env for security
             try:
                 import redis as redis_lib
-                self._redis = redis_lib.Redis(host=host, port=port, decode_responses=True)
+                self._redis = redis_lib.Redis(
+                    host=host,
+                    port=port,
+                    password=password,
+                    decode_responses=True,
+                    socket_connect_timeout=5,
+                    socket_keepalive=True
+                )
                 self._redis.ping()
                 logger.info(f"EphemeralMemory connected to Redis at {host}:{port}")
             except Exception as e:

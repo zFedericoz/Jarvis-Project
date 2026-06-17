@@ -373,8 +373,16 @@ class TerminalAction(BaseAction):
 
     async def _run(self, cmd: str, cwd: Path) -> tuple[str, str, int]:
         try:
-            proc = await asyncio.create_subprocess_shell(
-                cmd,
+            # Parse comando in argomenti per evitare shell injection
+            cmd_parts = shlex.split(cmd)
+            if not cmd_parts:
+                return "", "Empty command", 1
+
+            # Usa subprocess_exec (NO shell) invece di subprocess_shell
+            # Questo previene shell injection vulnerabilità
+            proc = await asyncio.create_subprocess_exec(
+                cmd_parts[0],
+                *cmd_parts[1:],
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
                 cwd=str(cwd),
@@ -394,7 +402,10 @@ class TerminalAction(BaseAction):
             return stdout, stderr, proc.returncode
 
         except FileNotFoundError:
-            return "", f"Comando non trovato: '{cmd.split()[0]}'", 127
+            return "", f"Comando non trovato: '{cmd_parts[0] if cmd_parts else 'unknown'}'", 127
+        except ValueError as e:
+            logger.error(f"Errore parsing comando '{cmd}': {e}")
+            return "", f"Invalid command syntax: {e}", 1
         except Exception as e:
             logger.error(f"Errore esecuzione '{cmd}': {e}")
             return "", str(e), 1

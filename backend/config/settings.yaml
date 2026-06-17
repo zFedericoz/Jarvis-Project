@@ -4,8 +4,9 @@
 
 llm:
   provider: ollama
-  # qwen3:8b — fallback, modello leggero (5.2 GB)
   # qwen3:30b-a3b — 18 GB, richiede GPU dedicata
+  # qwen3.6:35b - 21 GB, per CPU
+  # qwen3-coder:30b - 14GB, per GPU
   model: qwen3.5:4b     # nuovo modello consigliato (3.4 GB) — bilancia qualità e risorse
   reflection_model: qwen3.5:4b
   embedding_model: mxbai-embed-large

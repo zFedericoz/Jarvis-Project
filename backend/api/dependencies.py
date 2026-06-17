@@ -106,9 +106,9 @@ def get_memory(config):
     return _memory
 
 
-def get_chat_manager():
+def get_chat_manager(user_id: str = "default_user"):
     global _chat_manager
-    if _chat_manager is None:
-        from chat.chat_manager import ChatManager
-        _chat_manager = ChatManager()
-    return _chat_manager
+    # For now, use a single instance per user_id (not globally cached)
+    # In future with proper auth, create per-user instance or use request context
+    from chat.chat_manager import ChatManager
+    return ChatManager(user_id=user_id)

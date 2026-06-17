@@ -2,12 +2,14 @@ import asyncio
 import base64
 import json
 import logging
+import os
 import platform
 import subprocess
 import re
+import uuid
 from datetime import datetime, timezone
 from collections import deque
-from fastapi import APIRouter, WebSocket, UploadFile, File, Request
+from fastapi import APIRouter, WebSocket, UploadFile, File, Request, HTTPException
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 from pathlib import Path
@@ -23,10 +25,29 @@ UPLOAD_DIR = Path("/app/data/uploads")
 UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
 FEEDBACK_FILE = Path("/app/data/feedback.jsonl")
 
+# ── Security Constants ────────────────────────────────────────────────────────
+MAX_UPLOAD_SIZE = 50 * 1024 * 1024  # 50 MB
+BLOCKED_EXTENSIONS = {'.env', '.key', '.pem', '.secret', '.db', '.git', '.cfg', '.ini', '.sql', '.pwd', '.pass'}
+ALLOWED_EXTENSIONS = {'.txt', '.pdf', '.md', '.json', '.csv', '.log', '.py', '.js', '.ts', '.jsx', '.tsx',
+                      '.yaml', '.yml', '.rst', '.html', '.css', '.xml', '.toml', '.docx', '.xlsx'}
+
 # ── Pending Actions Store (per azioni pericolose) ─────────────────────────────
 _pending_actions: dict[str, dict] = {}
+_PENDING_ACTION_TTL = 300  # 5 minutes
 
 _DANGEROUS_ACTIONS = {"shutdown", "restart", "lock", "mute", "sleep", "hibernate"}
+
+def _cleanup_expired_actions():
+    """Remove pending actions that have timed out"""
+    now = datetime.now(timezone.utc)
+    expired = []
+    for action_id, action_data in _pending_actions.items():
+        created_at = datetime.fromisoformat(action_data.get("created_at", now.isoformat()))
+        if (now - created_at).total_seconds() > _PENDING_ACTION_TTL:
+            expired.append(action_id)
+    for action_id in expired:
+        del _pending_actions[action_id]
+        logger.info(f"Pending action {action_id} expired")
 
 def _is_dangerous(cmd: str) -> str | None:
     cmd_lower = cmd.lower()
@@ -318,12 +339,12 @@ async def chat_text(payload: ChatRequest, request: Request = None):
         else:
             dangerous_key = _is_dangerous(original_query) if intent == "system_control" else None
             if dangerous_key:
-                import uuid
                 action_id = str(uuid.uuid4())
                 _pending_actions[action_id] = {
                     "command": original_query,
                     "intent": intent,
                     "label": dangerous_key,
+                    "created_at": datetime.now(timezone.utc).isoformat(),
                 }
                 r = ChatResponse(
                     response=f"⚠️ Richiesta azione pericolosa: `{dangerous_key}`. Attendo conferma.",
@@ -393,9 +414,11 @@ async def chat_text(payload: ChatRequest, request: Request = None):
 
 @router.post("/confirm")
 async def confirm_action(payload: ConfirmRequest):
+    _cleanup_expired_actions()  # Clean up before checking
+
     action = _pending_actions.get(payload.action_id)
     if not action:
-        return {"status": "error", "message": "Azione non trovata o scaduta"}
+        return {"status": "error", "message": "Action not found or expired"}
 
     if payload.confirm:
         config = get_config()
@@ -404,30 +427,62 @@ async def confirm_action(payload: ConfirmRequest):
         if intent in actions:
             result = await actions[intent].execute(action["command"])
             del _pending_actions[payload.action_id]
+            logger.info(f"Action confirmed: {payload.action_id}")
             return {"status": "ok", "result": result, "action": payload.action_id}
-        return {"status": "error", "message": f"Action handler '{intent}' non trovato"}
+        return {"status": "error", "message": f"Action handler '{intent}' not found"}
     else:
         cmd = _pending_actions.pop(payload.action_id, None)
-        return {"status": "cancelled", "message": f"Azione annullata: {cmd['command'] if cmd else '?'}"}
+        logger.info(f"Action cancelled: {payload.action_id}")
+        return {"status": "cancelled", "message": f"Action cancelled: {cmd['command'] if cmd else '?'}"}
 
 @router.post("/upload", response_model=UploadResponse)
 async def upload_file(file: UploadFile = File(...)):
     content = await file.read()
-    filename = file.filename or "upload"
-    file_path = UPLOAD_DIR / filename
+
+    # ── 1. Size validation
+    if len(content) > MAX_UPLOAD_SIZE:
+        raise HTTPException(status_code=413, detail=f"File too large (max {MAX_UPLOAD_SIZE / (1024*1024):.0f} MB)")
+
+    # ── 2. Sanitize filename (prevent path traversal)
+    original_filename = file.filename or "upload"
+    safe_filename = os.path.basename(original_filename)
+
+    if not safe_filename or safe_filename in {'.', '..'}:
+        safe_filename = str(uuid.uuid4())
+
+    # ── 3. Extension validation
+    file_ext = Path(safe_filename).suffix.lower()
+
+    if file_ext in BLOCKED_EXTENSIONS:
+        raise HTTPException(
+            status_code=400,
+            detail=f"File type blocked for security: {file_ext}"
+        )
+
+    if file_ext not in ALLOWED_EXTENSIONS:
+        raise HTTPException(
+            status_code=400,
+            detail=f"File type not allowed: {file_ext}. Allowed: {', '.join(sorted(ALLOWED_EXTENSIONS))}"
+        )
+
+    # ── 4. Generate UUID-based filename to prevent collisions & path attacks
+    safe_name = f"{uuid.uuid4()}{file_ext}"
+    file_path = UPLOAD_DIR / safe_name
     file_path.parent.mkdir(parents=True, exist_ok=True)
+
     with open(file_path, "wb") as f:
         f.write(content)
 
-    ext = Path(filename).suffix.lower()
-    text_content = ""
+    logger.info(f"File uploaded: {safe_name} (original: {original_filename}, size: {len(content)} bytes)")
 
+    # ── 5. Extract text content
+    text_content = ""
     try:
-        if ext == ".docx":
+        if file_ext == ".docx":
             from docx import Document
             doc = Document(file_path)
             text_content = "\n".join(p.text for p in doc.paragraphs)
-        elif ext == ".xlsx":
+        elif file_ext == ".xlsx":
             import openpyxl
             wb = openpyxl.load_workbook(file_path, read_only=True, data_only=True)
             rows = []
@@ -435,15 +490,15 @@ async def upload_file(file: UploadFile = File(...)):
                 for row in sheet.iter_rows(values_only=True):
                     rows.append("\t".join(str(c) if c is not None else "" for c in row))
             text_content = "\n".join(rows)
-        elif ext in {".py", ".js", ".ts", ".jsx", ".tsx", ".yaml", ".yml", ".json", ".md", ".txt", ".rst", ".html", ".css", ".csv", ".xml", ".env", ".cfg", ".ini", ".toml", ".sql"}:
+        elif file_ext in {".py", ".js", ".ts", ".jsx", ".tsx", ".yaml", ".yml", ".json", ".md", ".txt", ".rst", ".html", ".css", ".csv", ".xml", ".toml"}:
             text_content = content.decode("utf-8", errors="replace")
         else:
             text_content = content.decode("utf-8", errors="replace")
     except Exception as e:
-        logger.warning(f"Estrazione testo fallita per {filename}: {e}")
-        text_content = f"[Impossibile estrarre il testo: {e}]"
+        logger.warning(f"Text extraction failed for {safe_name}: {e}")
+        text_content = f"[Unable to extract text: {e}]"
 
-    return UploadResponse(filename=filename, size=len(content), content=text_content)
+    return UploadResponse(filename=safe_name, size=len(content), content=text_content)
 
 
 @router.post("/feedback")
