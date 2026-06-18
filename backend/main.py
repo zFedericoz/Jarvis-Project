@@ -1,5 +1,8 @@
 import asyncio
+import json
 import logging
+import sys
+from datetime import datetime, timezone
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
@@ -12,10 +15,23 @@ from slowapi.errors import RateLimitExceeded
 from api.dependencies import resolve_env, get_config, get_brain, get_speech, get_actions, get_memory, get_chat_manager
 from api.routes import router
 
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s [%(name)s] %(levelname)s: %(message)s",
-)
+
+class JSONFormatter(logging.Formatter):
+    def format(self, record: logging.LogRecord) -> str:
+        log = {
+            "timestamp": datetime.fromtimestamp(record.created, tz=timezone.utc).isoformat(),
+            "level": record.levelname,
+            "logger": record.name,
+            "message": record.getMessage(),
+        }
+        if record.exc_info and record.exc_info[0]:
+            log["exception"] = self.formatException(record.exc_info)
+        return json.dumps(log, ensure_ascii=False)
+
+
+handler = logging.StreamHandler(sys.stdout)
+handler.setFormatter(JSONFormatter())
+logging.basicConfig(level=logging.INFO, handlers=[handler])
 logger = logging.getLogger("jarvis")
 
 limiter = Limiter(key_func=get_remote_address)
@@ -34,6 +50,14 @@ app.add_middleware(
 )
 
 app.include_router(router)
+
+# ── Prometheus metrics ────────────────────────────────────────────────────────
+from api.monitoring.metrics import MetricsMiddleware, metrics_response
+app.add_middleware(MetricsMiddleware)
+
+@app.get("/metrics")
+async def prometheus_metrics():
+    return metrics_response()
 
 # ──────────────────────────────────────────────
 # Route aggiuntive (Step 1-3)
@@ -131,6 +155,14 @@ async def startup():
     except Exception as e:
         logger.warning(f"  Chat DB init fallito: {e}")
 
+    # ── Plugin loader ──────────────────────────
+    try:
+        from plugins.loader import PluginLoader
+        _pl = PluginLoader()
+        _pl.discover_and_load()
+    except Exception as e:
+        logger.warning(f"  Plugin init fallito: {e}")
+
     asyncio.create_task(_warmup_all(config))
 
 
@@ -172,7 +204,8 @@ async def _warmup_all(config):
 
         # ── LLM warmup ────────────────────────────────
         logger.info("  LLM warmup (caricamento modello in RAM)...")
-        llm.warmup()
+        loop = asyncio.get_running_loop()
+        await loop.run_in_executor(None, llm.warmup)
         logger.info("  Tutti i componenti pronti")
 
     except Exception as e:

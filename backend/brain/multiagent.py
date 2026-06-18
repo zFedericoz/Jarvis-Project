@@ -11,8 +11,9 @@ Nuove feature:
 """
 
 import logging, re, json, hashlib
-from duckduckgo_search import DDGS
 from brain.semantic_cache import SemanticCache
+from brain.rag_searcher import RAGSearcher
+from brain.web_searcher import WebSearcher
 
 logger = logging.getLogger("jarvis.brain.multiagent")
 
@@ -102,22 +103,6 @@ You are a general assistant. Rules:
 """,
 }
 
-NEED_SEARCH_PATTERNS = [
-    r"\b(notizie|ultime|news|breaking|aggiornament)\b",
-    r"\b(meteo|tempo|che tempo|previsioni)\b",
-    r"\b(classifica|risultato|punteggio|partita)\b",
-    r"\b(prezzo|quanto costa|quanto costano)\b",
-    r"\b(elezion|presidente|governo|ministro|politic)\b",
-    r"\b(ultimo|ultima|recente|nuovo|nuova)\s+\w{3,}",
-    r"\b(today|latest|current|now|breaking)\b",
-]
-
-_CHARS_PER_TOKEN = 4
-_RAG_TOKEN_BUDGET = 1200
-_WEB_TOKEN_BUDGET = 600
-_RAG_CHAR_BUDGET = _RAG_TOKEN_BUDGET * _CHARS_PER_TOKEN
-_WEB_CHAR_BUDGET = _WEB_TOKEN_BUDGET * _CHARS_PER_TOKEN
-_RAG_DISTANCE_THRESHOLD = 1.2
 _REFLECTION_INTENTS = {"code", "research", "creative"}
 
 _SUMMARY_THRESHOLD = 4000
@@ -158,6 +143,8 @@ class MultiAgent:
         self._skills = skills_registry
         self._last_sources: list[dict] = []
         self._max_react_rounds = 5
+        self._rag_searcher = RAGSearcher(persistent_memory)
+        self._web_searcher = WebSearcher()
 
     def _map_intent(self, intent: str) -> str:
         return INTENT_TO_SPECIALIST.get(intent, "general")
@@ -219,70 +206,6 @@ class MultiAgent:
         texts = [f"{m['role']}: {m['content'][:500]}" for m in context[-10:]]
         return "\n".join(texts)
 
-    def _search_rag(self, query: str) -> str:
-        if not self._mem:
-            return ""
-        count = self._mem.knowledge.count()
-        if count == 0:
-            return ""
-        n_results = min(6, count)
-        try:
-            raw = self._mem.knowledge.query(
-                query_texts=[query], n_results=n_results,
-                include=["documents", "metadatas", "distances"],
-            )
-        except Exception as e:
-            logger.warning(f"RAG query fallita: {e}")
-            return ""
-        docs = raw.get("documents", [[]])[0]
-        metas = raw.get("metadatas", [[]])[0]
-        distances = raw.get("distances", [[]])[0]
-        if not docs:
-            return ""
-        relevant = [(d, m, dist) for d, m, dist in zip(docs, metas, distances) if dist <= _RAG_DISTANCE_THRESHOLD]
-        if not relevant:
-            return ""
-        lines = ["# Documenti rilevanti dalla knowledge base"]
-        total_chars = len(lines[0])
-        for doc, meta, dist in relevant:
-            source = meta.get("source", "sconosciuto")
-            ci = meta.get("chunk_index", "?")
-            h = f"\n[da: {source} §{ci}] (rilevanza: {1 - dist / 2:.0%})"
-            entry = f"{h}\n{doc}"
-            if total_chars + len(entry) > _RAG_CHAR_BUDGET:
-                break
-            lines.append(entry)
-            total_chars += len(entry)
-        return "\n".join(lines)
-
-    def _needs_web_search(self, message: str) -> bool:
-        return any(re.search(p, message.lower()) for p in NEED_SEARCH_PATTERNS)
-
-    def _search_web(self, query: str, max_results: int = 4):
-        try:
-            with DDGS() as ddgs:
-                results = list(ddgs.text(query, max_results=max_results))
-            if not results:
-                return ("", [])
-            lines = []
-            sources = []
-            total = 0
-            for i, r in enumerate(results, 1):
-                title = r.get("title", "")
-                url = r.get("href", "")
-                body = r.get("body", "")
-                snippet = f"- [{i}] {title}: {body[:300]}"
-                if total + len(snippet) > _WEB_CHAR_BUDGET:
-                    break
-                lines.append(snippet)
-                total += len(snippet)
-                if url:
-                    sources.append({"title": title or url, "url": url})
-            return ("\n".join(lines), sources)
-        except Exception as e:
-            logger.warning(f"Web search fallita: {e}")
-            return ("", [])
-
     def _user_context(self) -> str:
         if not self._mem:
             return ""
@@ -322,14 +245,14 @@ class MultiAgent:
         if user_ctx:
             extra_parts.append(user_ctx)
 
-        rag_ctx = self._search_rag(query)
+        rag_ctx = self._rag_searcher.search(query)
         if rag_ctx:
             extra_parts.append(rag_ctx)
 
         rag_already_covers = bool(rag_ctx)
-        if self._needs_web_search(query) and not rag_already_covers:
+        if self._web_searcher.needs_search(query) and not rag_already_covers:
             logger.info(f"Web search attivata per: {query[:80]}")
-            web_results = self._search_web(query)
+            web_results = self._web_searcher.search(query)
             if web_results[0]:
                 extra_parts.append("Risultati web (usa solo se pertinenti, ignora altrimenti):\n" + web_results[0])
                 self._last_sources = web_results[1]
@@ -422,6 +345,7 @@ class MultiAgent:
                         try:
                             args_raw = json.loads(args_raw)
                         except json.JSONDecodeError:
+                            logger.error(f"JSON non valido negli argomenti di '{name}': {args_raw[:200]}")
                             args_raw = {}
                     logger.info(f"ReAct round {round_idx + 1}: chiamata tool '{name}' con {args_raw}")
                     if assistant_text:

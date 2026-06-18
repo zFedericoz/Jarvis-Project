@@ -1,14 +1,16 @@
 services:
   redis:
     image: redis:7-alpine
-    command: redis-server --requirepass jarvis_secure_password_change_me --bind 127.0.0.1
+    command: redis-server --requirepass ${REDIS_PASSWORD}
+    environment:
+      - REDIS_PASSWORD=${REDIS_PASSWORD}
     ports:
       - "127.0.0.1:6379:6379"
     restart: unless-stopped
     networks:
       - jarvis-net
     healthcheck:
-      test: ["CMD", "redis-cli", "ping"]
+      test: ["CMD", "sh", "-c", "redis-cli -a \"$$REDIS_PASSWORD\" ping | grep -q PONG"]
       interval: 10s
       timeout: 5s
       retries: 3
@@ -28,7 +30,7 @@ services:
     environment:
       - OLLAMA_HOST=http://host.docker.internal:11434
       - REDIS_HOST=redis
-      - REDIS_PASSWORD=jarvis_secure_password_change_me
+      - REDIS_PASSWORD=${REDIS_PASSWORD}
     depends_on:
       redis:
         condition: service_healthy
@@ -37,10 +39,10 @@ services:
       - jarvis-net
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8765/api/status', timeout=3)"]
-      start_period: 120s
-      interval: 15s
-      timeout: 5s
-      retries: 3
+      start_period: 600s
+      interval: 30s
+      timeout: 10s
+      retries: 5
 
   frontend:
     build:
@@ -50,7 +52,19 @@ services:
       - "80:80"
     depends_on:
       backend:
-        condition: service_healthy
+        condition: service_started
+    restart: unless-stopped
+    networks:
+      - jarvis-net
+
+  backup:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile.backup
+    volumes:
+      - ./data:/app/data
+    depends_on:
+      - backend
     restart: unless-stopped
     networks:
       - jarvis-net

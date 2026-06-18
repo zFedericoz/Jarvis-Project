@@ -1,193 +1,101 @@
-# =============================================================================
-# J.A.R.V.I.S. - Configuration
-# =============================================================================
-
+actions:
+  enabled:
+  - system_control
+  - web_search
+  - media_player
+  - productivity
+  web_search:
+    engine: duckduckgo
+    max_results: 5
+audio:
+  channels: 1
+  input_device: default
+  output_device: default
+  sample_rate: 16000
+briefing:
+  city: Bologna
+  enabled: true
+  hour: 8
+  language: it
+  minute: 0
+focus:
+  block_sites: true
+  break_minutes: 5
+  long_break_minutes: 15
+  mute_notifications: true
+  work_minutes: 25
+git:
+  default_repo: .
+  log_default_n: 5
 llm:
-  provider: ollama
-  # qwen3:30b-a3b — 18 GB, richiede GPU dedicata
-  # qwen3.6:35b - 21 GB, per CPU
-  # qwen3-coder:30b - 14GB, per GPU
-  model: qwen3.5:4b     # nuovo modello consigliato (3.4 GB) — bilancia qualità e risorse
-  reflection_model: qwen3.5:4b
+  context_window: 8192
   embedding_model: mxbai-embed-large
   host: ${OLLAMA_HOST:-http://localhost:11434}
+  model: qwen3.5:4b
+  num_gpu: -1
+  provider: ollama
+  reflection_model: qwen3.5:4b
   temperature: 0.1
-  context_window: 8192   # aumentato per sfruttare la finestra di qwen3.5
-  num_gpu: -1            # -1 = auto (usa GPU se disponibile), 0 = CPU, N = numero layers GPU
-
-speech:
-  stt:
-    engine: faster-whisper
-    # tiny  = ~75MB, veloce, qualità bassa (sconsigliato per italiano)
-    # base  = ~150MB, buon bilanciamento ← consigliato su CPU
-    # small = ~500MB, ottimo per italiano
-    model: base          # era "tiny" → aggiornato a "base"
-    device: cpu
-    compute_type: int8
-    language: auto       # auto = rilevamento automatico della lingua
-
-  tts:
-    # Ordine di priorità: kokoro → xtts (se voice sample presente) → edge-tts (cloud fallback)
-    engine: kokoro       # era "edge-tts" → aggiornato a "kokoro"
-    kokoro_speed: 1.0    # velocità voce: 0.8 = più lenta, 1.2 = più veloce
-    voice_sample: models/voice/jarvis_sample.wav   # opzionale: abilita XTTS voice cloning
-    device: cpu
-    fallback:
-      engine: edge-tts
-      voice: it-IT-IsabellaNeural   # usato solo se kokoro E xtts falliscono
-
-  wake_word:
-    engine: porcupine
-    keyword: jarvis
-    sensitivity: 0.5
-    model_path: models/porcupine/jarvis.ppn
-
-vision:
-  enabled: true
-  engine: yolov8
-  model: yolov8n.pt
-  device: cpu
-  camera_id: 0
-
 memory:
+  long_term:
+    collection: jarvis_memories
+    engine: chroma
+    persist_dir: data/chroma_db
   short_term:
     engine: redis
     host: ${REDIS_HOST:-localhost}
     port: 6379
     ttl: 3600
-  long_term:
-    engine: chroma
-    persist_dir: data/chroma_db
-    collection: jarvis_memories
-
-actions:
-  enabled:
-    - system_control
-    - web_search
-    - media_player
-    - productivity
-  web_search:
-    engine: duckduckgo
-    max_results: 5
-
-audio:
-  input_device: default
-  output_device: default
-  sample_rate: 16000
-  channels: 1
-
+rag:
+  chunk_overlap: 100
+  chunk_size: 800
+  knowledge_folder: data/knowledge
+  watch_interval: 300
+rpa:
+  failsafe: true
+  move_duration: 0.3
+  screenshot_quality: 85
+  screenshots_dir: data/screenshots
 server:
+  cors_origins:
+  - http://localhost:5173
+  - http://localhost:3000
+  - http://localhost:80
+  - http://localhost
   host: 0.0.0.0
   port: 8765
-  cors_origins:
-    - http://localhost:5173
-    - http://localhost:3000
-    - http://localhost:80
-    - http://localhost
-
-# =============================================================================
-# Step 3 — Briefing quotidiano
-# =============================================================================
-briefing:
-  enabled: true
-  hour: 8          # ora del briefing (formato 24h)
-  minute: 0
-  city: Bologna    # città per il meteo (wttr.in)
-  language: it
-
-# =============================================================================
-# Step 2 — RAG / Knowledge base
-# =============================================================================
-rag:
-  knowledge_folder: data/knowledge   # metti qui PDF, TXT, MD da indicizzare
-  watch_interval: 300                # secondi tra una scansione e l'altra (5 min)
-  chunk_size: 800
-  chunk_overlap: 100
-
-# =============================================================================
-# Step 4 — Git automation
-# =============================================================================
-git:
-  # Repo di default se l'utente non specifica il percorso nella richiesta
-  # e non ha salvato "cartella_progetti" nelle preferenze persistenti.
-  # Puoi anche dire a JARVIS "la mia cartella progetti è C:/Dev/JARVIS"
-  # e lui la salverà automaticamente senza toccare questo file.
-  default_repo: "."
-
-  # Numero massimo di commit mostrati quando non specificato dall'utente
-  log_default_n: 5
-
-# =============================================================================
-# Step 5 — Terminale sicuro
-# =============================================================================
+speech:
+  stt:
+    compute_type: int8
+    device: cpu
+    engine: faster-whisper
+    language: auto
+    model: small
+  tts:
+    device: cpu
+    engine: kokoro
+    fallback:
+      engine: edge-tts
+      voice: it-IT-IsabellaNeural
+    kokoro_speed: 1.2
+    voice_sample: models/voice/jarvis_sample.wav
+  wake_word:
+    engine: porcupine
+    keyword: jarvis
+    model_path: models/porcupine/jarvis.ppn
+    sensitivity: 0.5
 terminal:
-  enabled: true
-
-  # Cartella di lavoro di default per i comandi eseguiti
-  # Puoi anche dirlo a JARVIS: "la mia cartella progetti è C:/Dev/JARVIS"
-  working_dir: "."
-
-  # Timeout in secondi per ogni comando (dopo il quale viene killato)
-  timeout: 15
-
-  # Categorie di comandi abilitate.
-  # Valori possibili: info, filesystem, python, network_info, docker_info, git
-  #
-  # info         → ps, df, free, uname, whoami, env, date, uptime, tasklist
-  # filesystem   → ls, dir, find, cat, head, tail, pwd, tree, wc
-  # python       → python, python3, pip (solo install/list/show/freeze)
-  # network_info → ping, curl (solo GET), nslookup, dig, ipconfig, ip, netstat
-  # docker_info  → docker ps/images/logs/stats/inspect (sola lettura)
-  # git          → git status/log/diff/branch (fallback, GitAction ha priorità)
-  #
-  # ATTENZIONE: non aggiungere categorie non elencate sopra.
-  # Per comandi non previsti, usare direttamente il terminale del sistema.
   allowed_categories:
-    - info
-    - filesystem
-    - python
-    - docker_info
-
-# =============================================================================
-# Step 6 — Modalità Focus
-# =============================================================================
-focus:
-  # Durata default di lavoro (minuti). Modificabile anche vocalmente:
-  # "JARVIS, pomodoro da 45 minuti"
-  work_minutes: 25
-
-  # Durata pausa breve (dopo ogni pomodoro)
-  break_minutes: 5
-
-  # Durata pausa lunga (ogni 4 pomodori)
-  long_break_minutes: 15
-
-  # Blocca i siti distraenti nel file hosts durante il focus.
-  # RICHIEDE che il container/processo giri con privilegi elevati (admin/root).
-  # Se disabilitato, il Pomodoro funziona comunque (solo timer + notifiche).
-  block_sites: true
-
-  # Attiva Focus Assist (Windows DND) durante il focus.
-  # Su Linux/Mac non ha effetto.
-  mute_notifications: true
-
-# =============================================================================
-# Step 7 — RPA / UI Automation
-# =============================================================================
-rpa:
-  # Secondi di animazione per i movimenti del mouse (0 = istantaneo)
-  move_duration: 0.3
-
-  # Failsafe: se il mouse raggiunge l'angolo in alto a sinistra, pyautogui
-  # lancia FailSafeException e blocca tutto. Tienilo true in dev.
-  failsafe: true
-
-  # Cartella dove vengono salvati gli screenshot
-  screenshots_dir: data/screenshots
-
-  # Qualità PNG degli screenshot (1-95)
-  screenshot_quality: 85
-
-  # Proxy URL per RPA su host Windows (quando backend è in Docker).
-  # Attivalo lanciando host_rpa_server.py su Windows, poi scommenta:
-  # host_proxy_url: "http://host.docker.internal:18766"
+  - info
+  - filesystem
+  - python
+  - docker_info
+  enabled: true
+  timeout: 15
+  working_dir: .
+vision:
+  camera_id: 0
+  device: cpu
+  enabled: true
+  engine: yolov8
+  model: yolov8n.pt

@@ -12,10 +12,10 @@ import MarketPanel from "./components/MarketPanel";
 import { useStore } from "./hooks/useStore";
 import { fetchFromBest } from "./utils/fetch";
 import { THEMES, C, setTheme as applyTheme, font, mono } from "./utils/theme";
+import VectorViz from "./components/VectorViz";
 import { API_URL } from "./utils/constants";
 
 const HOST_METRICS_URL = "http://localhost:18765";
-const DOCKER_API = "";
 
 interface MetricSnapshot {
   cpu: number; ram: number; temp: number|null; disk: number;
@@ -35,12 +35,28 @@ export default function JarvisDashboard() {
   const [feedbackSent, setFeedbackSent] = useState<Record<number,number>>({});
   const [attachedFiles, setAttachedFiles] = useState<{name:string;content:string}[]>([]);
   const [dragOver, setDragOver] = useState(false);
+  const [uploading, setUploading] = useState(false);
   const [theme, setThemeState] = useState<"dark"|"light">("dark");
   const [activeTab, setActiveTab] = useState<"reactor" | "markets" | "log">("reactor");
   const [pendingActionId, setPendingActionId] = useState<string | null>(null);
   const [pendingActionLabel, setPendingActionLabel] = useState<string>("");
   const [confirming, setConfirming] = useState(false);
+  const [ctxMenu, setCtxMenu] = useState<{x:number;y:number;msg:{id:number;role:string;text:string}}|null>(null);
+  const [authToken, setAuthToken] = useState<string|null>(() => localStorage.getItem("jwt_token"));
+  const [authUser, setAuthUser] = useState<string|null>(() => localStorage.getItem("jwt_user"));
+  const [authMode, setAuthMode] = useState<"login"|"register">("login");
+  const [authForm, setAuthForm] = useState({username:"",password:""});
+  const [authError, setAuthError] = useState("");
+  const [showVectorViz, setShowVectorViz] = useState(false);
   const [timeStr, setTimeStr] = useState(new Date().toLocaleTimeString('it-IT'));
+  const [ragThreshold, setRagThreshold] = useState(1.2);
+  useEffect(() => {
+    fetch("/api/rag/threshold").then(r => r.ok && r.json()).then(d => { if (d?.threshold != null) setRagThreshold(d.threshold); }).catch(() => {});
+  }, []);
+  const updateRagThreshold = async (val: number) => {
+    setRagThreshold(val);
+    try { await fetch("/api/rag/threshold", {method:"PUT", headers:{"Content-Type":"application/json"}, body:JSON.stringify({threshold:val})}); } catch {}
+  };
   useEffect(() => { applyTheme(theme); }, [theme]);
   useEffect(() => { const id = setInterval(() => setTimeStr(new Date().toLocaleTimeString('it-IT')), 1000); return () => clearInterval(id); }, []);
   const msgIdRef = useRef(1);
@@ -54,18 +70,22 @@ export default function JarvisDashboard() {
   // Validate session existence
   useEffect(() => {
     if (activeSessionId) {
-      fetch(`${DOCKER_API}/api/chats/${activeSessionId}`)
-        .catch(() => {
-          setChatHistory([]);  // Reset if not found
-          localStorage.removeItem('activeSessionId');
-        });
+      fetch(`/api/chats/${activeSessionId}`).then(r => {
+        if (!r.ok) throw new Error(`HTTP ${r.status}`);
+      }).catch(() => {
+        setChatHistory([]);
+        localStorage.removeItem('activeSessionId');
+        if (!messages.find(m => m.text.includes("Sessione scaduta"))) {
+          setMessages(p => [...p, {id:msgIdRef.current++,role:"system",text:"⚠️ Sessione scaduta o non valida. Nuova sessione avviata."}]);
+        }
+      });
     }
   }, [activeSessionId, setChatHistory]);
 
   const sendFeedback = async (msgId:number, rating:number, userMsg:string, assistantMsg:string) => {
     if (feedbackSent[msgId]) return;
     try {
-      await fetch(`${DOCKER_API}/api/feedback`, {
+      await fetch(`/api/feedback`, {
         method:"POST", headers:{"Content-Type":"application/json"},
         body:JSON.stringify({message_id:String(msgId),user_message:userMsg,assistant_response:assistantMsg,rating,language:"it",intent:"chat"}),
       });
@@ -73,31 +93,46 @@ export default function JarvisDashboard() {
     } catch {}
   };
 
-  const exportChat = () => {
-    const txt = displayMessages.map(m => `${m.role === "user" ? "TU" : "J.A.R.V.I.S."}: ${m.text}`).join("\n\n---\n\n");
-    const blob = new Blob([txt], {type:"text/plain;charset=utf-8"});
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement("a"); a.href = url; a.download = `jarvis-${new Date().toISOString().slice(0,10)}.txt`; a.click();
-    URL.revokeObjectURL(url);
+  const exportChat = async (fmt: "txt" | "pdf") => {
+    const msgs = displayMessages.map(m => ({role: m.role, text: m.text}));
+    if (fmt === "txt") {
+      const txt = msgs.map(m => `${m.role === "user" ? "TU" : "J.A.R.V.I.S."}: ${m.text}`).join("\n\n---\n\n");
+      const blob = new Blob([txt], {type:"text/plain;charset=utf-8"});
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a"); a.href = url; a.download = `jarvis-${new Date().toISOString().slice(0,10)}.txt`; a.click();
+      URL.revokeObjectURL(url);
+    } else {
+      try {
+        const r = await fetch(`/api/export/pdf`, {method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify({messages:msgs,format:"pdf"})});
+        if (!r.ok) throw new Error(`HTTP ${r.status}`);
+        const blob = await r.blob();
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement("a"); a.href = url; a.download = `jarvis-${new Date().toISOString().slice(0,10)}.pdf`; a.click();
+        URL.revokeObjectURL(url);
+      } catch (err) { console.error("PDF export fallito:", err); }
+    }
   };
 
   const fetchMetrics = useCallback(async () => {
-    const d = await fetchFromBest([`${HOST_METRICS_URL}/api/system/metrics`, `${DOCKER_API}/api/system/metrics`]);
+    const d = await fetchFromBest([`${HOST_METRICS_URL}/api/system/metrics`, `/api/system/metrics`]);
     if (d) setMetrics(d as MetricSnapshot);
   }, []);
 
   useEffect(() => { fetchMetrics(); const id = setInterval(fetchMetrics, 5000); return () => clearInterval(id); }, [fetchMetrics]);
 
   const uploadFile = async (file: File) => {
+    setUploading(true);
     const fd = new FormData();
     fd.append("file", file);
     try {
-      const r = await fetch(`${DOCKER_API}/api/upload`, {method:"POST", body:fd});
+      const r = await fetch(`/api/upload`, {method:"POST", body:fd});
       if (!r.ok) throw new Error(`HTTP ${r.status}`);
       const d = await r.json();
       setAttachedFiles(p => [...p, {name:d.filename, content:d.content}]);
     } catch (err) {
       console.error("Upload fallito:", err);
+    } finally {
+      setUploading(false);
     }
   };
 
@@ -126,7 +161,7 @@ export default function JarvisDashboard() {
     if (!pendingActionId) return;
     setConfirming(true);
     try {
-      const r = await fetch(`${DOCKER_API}/api/confirm`, {
+      const r = await fetch(`/api/confirm`, {
         method:"POST", headers:{"Content-Type":"application/json"},
         body:JSON.stringify({action_id: pendingActionId, confirm}),
       });
@@ -156,6 +191,39 @@ export default function JarvisDashboard() {
     setIsResponding(false);
   };
 
+  const handleAuth = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setAuthError("");
+    try {
+      const r = await fetch(`/api/auth/${authMode}`, {method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify(authForm)});
+      const d = await r.json();
+      if (!r.ok) { setAuthError(d.detail || "Auth failed"); return; }
+      localStorage.setItem("jwt_token", d.access_token);
+      localStorage.setItem("jwt_user", d.username);
+      setAuthToken(d.access_token);
+      setAuthUser(d.username);
+    } catch (err) { setAuthError("Connection error"); }
+  };
+
+  const handleLogout = () => {
+    localStorage.removeItem("jwt_token");
+    localStorage.removeItem("jwt_user");
+    setAuthToken(null);
+    setAuthUser(null);
+  };
+
+  const handleKeyDown = (e: React.KeyboardEvent) => {
+    if (e.key === "Escape" && isResponding) {
+      e.preventDefault();
+      handleStop();
+    }
+    if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) {
+      e.preventDefault();
+      const form = (e.target as HTMLElement).closest("form");
+      form?.requestSubmit();
+    }
+  };
+
   const handleSubmit = async (e: FormEvent) => {
     e.preventDefault();
     const hasContent = chatInput.trim() || attachedFiles.length > 0;
@@ -175,7 +243,7 @@ export default function JarvisDashboard() {
     const timeout = setTimeout(() => controller.abort(), 120000);
     abortRef.current = controller;
     try {
-      const r = await fetch(`${DOCKER_API}/api/chat`, {
+      const r = await fetch(`/api/chat`, {
         method:"POST", headers:{"Content-Type":"application/json"},
         body:JSON.stringify({text:userMsg, file_content: fileContent, session_id: activeSessionId ?? undefined, stream: true}),
         signal: controller.signal,
@@ -253,6 +321,10 @@ export default function JarvisDashboard() {
     }
   }, [messages]);
 
+  useEffect(() => { if (!ctxMenu) return; const close = () => setCtxMenu(null); window.addEventListener("click", close); return () => window.removeEventListener("click", close); }, [ctxMenu]);
+
+  const copyToClipboard = async (text: string) => { try { await navigator.clipboard.writeText(text); } catch {} };
+
   const displayMessages = activeSessionId && chatHistory.length > 0
     ? [{id:0,role:"system",text:"Sistemi ausiliari inizializzati."}, ...chatHistory.map((m,i) => ({id:i+1,role:m.role,text:m.content}))]
     : messages;
@@ -276,9 +348,24 @@ export default function JarvisDashboard() {
           <span onClick={()=>setThemeState(t=>t==="dark"?"light":"dark")}
             style={{cursor:"pointer",fontSize:16,color:C.amber,transition:"transform 0.2s"}}
             title="Cambia tema">{theme==="dark"?"☀️":"🌙"}</span>
-          <span onClick={exportChat}
+          <span onClick={()=>exportChat("txt")}
             style={{cursor:"pointer",fontSize:14,color:C.textDim}}
-            title="Esporta conversazione">📥</span>
+            title="Esporta come TXT">📄</span>
+          <span onClick={()=>exportChat("pdf")}
+            style={{cursor:"pointer",fontSize:14,color:C.textDim}}
+            title="Esporta come PDF">📕</span>
+          <span onClick={()=>setShowVectorViz(true)}
+            style={{cursor:"pointer",fontSize:13,color:C.textDim}}
+            title="Visualizzazione vettori">📊</span>
+          <label style={{display:"flex",alignItems:"center",gap:4,fontSize:11,cursor:"pointer",color:C.textFaint}} title="Soglia similarità RAG">
+            RAG
+            <input type="range" min="0.1" max="3.0" step="0.1" value={ragThreshold}
+              onChange={e=>updateRagThreshold(parseFloat(e.target.value))}
+              style={{width:60,height:4,accentColor:C.cyan,verticalAlign:"middle",cursor:"pointer"}} />
+            <span style={{minWidth:28,textAlign:"right",fontFamily:mono}}>{ragThreshold.toFixed(1)}</span>
+          </label>
+          {authUser && <span style={{fontSize:11,color:C.green,fontFamily:mono}}>{authUser}</span>}
+          {authUser && <span onClick={handleLogout} style={{cursor:"pointer",fontSize:13,color:C.textFaint}} title="Logout">🚪</span>}
           {timeStr}
         </div>
       </div>
@@ -320,15 +407,21 @@ export default function JarvisDashboard() {
                   onDragLeave={()=>setDragOver(false)}
                   onDrop={handleDrop}
                   style={{flex:1,overflowY:"auto",display:"flex",flexDirection:"column",gap:4,padding:"6px 8px",background:dragOver?"rgba(0,229,255,0.08)":"rgba(0,0,0,0.15)",borderRadius:4,border:`1px solid ${dragOver?C.cyan:C.cyanFaint}`,transition:"background 0.15s, border-color 0.15s"}}>
+                  {isResponding && displayMessages.filter(m=>m.role==="system").every(m => m.text) && (
+                    <div style={{alignSelf:"flex-start",background:"rgba(0,255,136,0.03)",borderLeft:`2px solid ${C.green}`,padding:"5px 10px",borderRadius:4,fontSize:13,color:C.textDim,fontFamily:mono,display:"flex",alignItems:"center",gap:6}}>
+                      <span style={{fontSize:14,animation:"blink 1.2s ease-in-out infinite"}}>●</span> J.A.R.V.I.S. sta pensando...
+                    </div>
+                  )}
                   {displayMessages.slice(1).map((msg,i,arr) => {
                     const prevUser = msg.role==="system" ? arr.slice(0,i).reverse().find(m => m.role==="user") : null;
                     return (
-                    <div key={msg.id} style={{
+                    <div key={msg.id} onContextMenu={e => { e.preventDefault(); setCtxMenu({x:e.clientX,y:e.clientY,msg}); }}
+                      style={{
                       alignSelf: msg.role==="user" ? "flex-end" : "flex-start",
                       background: msg.role==="user" ? C.cyanFaint : "rgba(0,255,136,0.05)",
                       borderLeft: msg.role==="system" ? `2px solid ${C.green}` : "none",
                       borderRight: msg.role==="user" ? `2px solid ${C.cyan}` : "none",
-                      padding:"5px 10px",borderRadius:4,maxWidth:"85%",fontSize:14,lineHeight:1.5,position:"relative",
+                      padding:"5px 10px",borderRadius:4,maxWidth:"85%",fontSize:14,lineHeight:1.5,position:"relative",cursor:"context-menu",
                     }}>
                       <span style={{fontSize:10,color:msg.role==="user"?C.cyan:C.green,display:"block",marginBottom:1,fontFamily:mono,letterSpacing:"0.05em"}}>
                         {msg.role==="user" ? "TU" : "J.A.R.V.I.S."}
@@ -361,7 +454,7 @@ export default function JarvisDashboard() {
                   <div ref={chatEndRef} />
                 </div>
 
-                {attachedFiles.length > 0 && (
+                {(attachedFiles.length > 0 || uploading) && (
                   <div style={{flexShrink:0,display:"flex",gap:6,flexWrap:"wrap"}}>
                     {attachedFiles.map((f,i) => (
                       <span key={i} style={{fontSize:13,fontFamily:mono,background:"rgba(0,229,255,0.12)",border:`1px solid ${C.cyan}`,borderRadius:4,padding:"3px 10px",display:"flex",alignItems:"center",gap:6,color:C.cyan,boxShadow:"0 0 8px rgba(0,229,255,0.12)"}}>
@@ -369,6 +462,11 @@ export default function JarvisDashboard() {
                         <span onClick={()=>removeFile(i)} style={{cursor:"pointer",color:C.red,fontSize:16,lineHeight:"14px",fontWeight:"bold",marginLeft:2,opacity:0.8}} title="Rimuovi">×</span>
                       </span>
                     ))}
+                    {uploading && (
+                      <span style={{fontSize:13,fontFamily:mono,background:"rgba(0,229,255,0.08)",border:`1px solid ${C.cyanFaint}`,borderRadius:4,padding:"3px 10px",display:"flex",alignItems:"center",gap:6,color:C.textDim}}>
+                        <span style={{fontSize:15,animation:"spin 0.8s linear infinite",display:"inline-block"}}>⟳</span> Caricamento...
+                      </span>
+                    )}
                   </div>
                 )}
                 </>
@@ -392,7 +490,8 @@ export default function JarvisDashboard() {
                   onMouseLeave={e=>(e.currentTarget.style.background="rgba(0,229,255,0.08)")}
                 >📎</button>
                 <input type="text" value={chatInput} onChange={e=>setChatInput(e.target.value)}
-                  placeholder="Invia una direttiva testuale a J.A.R.V.I.S..."
+                  onKeyDown={handleKeyDown}
+                  placeholder="Invia una direttiva testuale a J.A.R.V.I.S... (Ctrl+Enter per inviare, Esc per stop)"
                   disabled={isResponding}
                   style={{flex:1,background:"rgba(0,0,0,0.25)",border:`1px solid ${C.border}`,color:C.text,fontFamily:font,fontSize:15,padding:"9px 14px",outline:"none",borderRadius:4}}
                 />
@@ -425,6 +524,27 @@ export default function JarvisDashboard() {
         </div>
       </div>
 
+      {/* ── Auth Modal ── */}
+      {!authToken && (
+        <div style={{position:"fixed",inset:0,zIndex:9998,background:"rgba(7,21,32,0.95)",display:"flex",alignItems:"center",justifyContent:"center"}}>
+          <form onSubmit={handleAuth} style={{background:"#0a1e30",border:"1px solid rgba(0,229,255,0.25)",borderRadius:8,padding:"30px 40px",width:340,boxShadow:"0 0 40px rgba(0,229,255,0.1)"}}>
+            <div style={{textAlign:"center",marginBottom:20,fontFamily:mono,fontSize:18,letterSpacing:"0.3em",color:C.cyan,fontWeight:"bold"}}>J.A.R.V.I.S.</div>
+            <div style={{display:"flex",gap:0,marginBottom:16}}>
+              <button type="button" onClick={()=>setAuthMode("login")} style={{flex:1,padding:"6px 0",background:authMode==="login"?C.cyanFaint:"transparent",border:`1px solid ${authMode==="login"?C.cyan:"transparent"}`,color:authMode==="login"?C.cyan:C.textDim,borderRadius:"4px 0 0 4px",cursor:"pointer",fontSize:13}}>Accedi</button>
+              <button type="button" onClick={()=>setAuthMode("register")} style={{flex:1,padding:"6px 0",background:authMode==="register"?C.cyanFaint:"transparent",border:`1px solid ${authMode==="register"?C.cyan:"transparent"}`,color:authMode==="register"?C.cyan:C.textDim,borderRadius:"0 4px 4px 0",cursor:"pointer",fontSize:13}}>Registrati</button>
+            </div>
+            <input type="text" placeholder="Username" value={authForm.username} onChange={e=>setAuthForm(p=>({...p,username:e.target.value}))}
+              style={{width:"100%",padding:"8px 10px",marginBottom:8,background:"rgba(0,0,0,0.3)",border:"1px solid rgba(0,229,255,0.2)",borderRadius:4,color:C.text,fontSize:14,outline:"none"}} />
+            <input type="password" placeholder="Password" value={authForm.password} onChange={e=>setAuthForm(p=>({...p,password:e.target.value}))}
+              style={{width:"100%",padding:"8px 10px",marginBottom:12,background:"rgba(0,0,0,0.3)",border:"1px solid rgba(0,229,255,0.2)",borderRadius:4,color:C.text,fontSize:14,outline:"none"}} />
+            {authError && <div style={{color:C.red,fontSize:12,marginBottom:8,fontFamily:mono}}>⚠ {authError}</div>}
+            <button type="submit" style={{width:"100%",padding:"8px 0",background:C.cyanFaint,border:"1px solid rgba(0,229,255,0.3)",borderRadius:4,color:C.cyan,cursor:"pointer",fontSize:14}}>
+              {authMode === "login" ? "Accedi" : "Registrati"}
+            </button>
+          </form>
+        </div>
+      )}
+
       {pendingActionId && (
         <ConfirmModal
           pendingActionLabel={pendingActionLabel}
@@ -432,6 +552,26 @@ export default function JarvisDashboard() {
           onConfirm={handleConfirm}
         />
       )}
+
+      {ctxMenu && (
+        <div style={{position:"fixed",top:0,left:0,right:0,bottom:0,zIndex:9999}} onClick={()=>setCtxMenu(null)}>
+          <div style={{position:"absolute",top:ctxMenu.y,left:ctxMenu.x,background:"#111",border:"1px solid #333",borderRadius:6,boxShadow:"0 4px 20px rgba(0,0,0,0.6)",padding:"4px 0",minWidth:160,zIndex:10000,fontSize:13,fontFamily:mono}}
+            onClick={e=>e.stopPropagation()}>
+            <div onClick={()=>{copyToClipboard(ctxMenu.msg.text);setCtxMenu(null);}}
+              style={{padding:"6px 14px",cursor:"pointer",color:"#ccc",display:"flex",alignItems:"center",gap:8}}
+              onMouseEnter={e=>e.currentTarget.style.background="#222"} onMouseLeave={e=>e.currentTarget.style.background="transparent"}>
+              📋 Copia testo
+            </div>
+            <div onClick={()=>{copyToClipboard(ctxMenu.msg.text);const blob=new Blob([ctxMenu.msg.text],{type:"text/plain;charset=utf-8"});const url=URL.createObjectURL(blob);const a=document.createElement("a");a.href=url;a.download=`messaggio-${ctxMenu.msg.id}.txt`;a.click();URL.revokeObjectURL(url);setCtxMenu(null);}}
+              style={{padding:"6px 14px",cursor:"pointer",color:"#ccc",display:"flex",alignItems:"center",gap:8}}
+              onMouseEnter={e=>e.currentTarget.style.background="#222"} onMouseLeave={e=>e.currentTarget.style.background="transparent"}>
+              📥 Esporta messaggio
+            </div>
+          </div>
+        </div>
+      )}
+
+      {showVectorViz && <VectorViz onClose={()=>setShowVectorViz(false)} />}
     </div>
   );
 }

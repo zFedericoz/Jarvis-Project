@@ -152,7 +152,7 @@ class FocusMode:
 
         elapsed = ""
         if self._session_start:
-            secs = int((datetime.now() - self._session_start).total_seconds())
+            secs = int((datetime.now(timezone.utc) - self._session_start).total_seconds())
             elapsed = f" Sessione durata: {self._fmt(secs)}."
 
         return f"Modalità focus disattivata.{elapsed} Ottimo lavoro."
@@ -175,7 +175,7 @@ class FocusMode:
             return "Il focus non è in pausa."
 
         self._state = FocusState.WORKING
-        self._phase_end = datetime.now() + timedelta(seconds=self._pause_remaining)
+        self._phase_end = datetime.now(timezone.utc) + timedelta(seconds=self._pause_remaining)
 
         if self._block_sites:
             self._apply_hosts_block()
@@ -293,7 +293,7 @@ class FocusMode:
 
         # Avvia la pausa automaticamente
         self._state = FocusState.BREAK
-        self._phase_end = datetime.now() + timedelta(minutes=break_min)
+        self._phase_end = datetime.now(timezone.utc) + timedelta(minutes=break_min)
 
         if self._block_sites:
             self._remove_hosts_block()
@@ -463,7 +463,7 @@ $notify.Dispose()
     def _seconds_remaining(self) -> float:
         if not self._phase_end:
             return 0.0
-        delta = (self._phase_end - datetime.now()).total_seconds()
+        delta = (self._phase_end - datetime.now(timezone.utc)).total_seconds()
         return max(0.0, delta)
 
     def _fmt(self, seconds: float) -> str:

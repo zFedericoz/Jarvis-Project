@@ -213,91 +213,64 @@ class RPAAction(BaseAction):
         """
         base = self._proxy_url.rstrip("/")
 
-        if sub == "screenshot":
-            data = self._proxy_call_sync("POST", f"{base}/api/rpa/screenshot")
-            return data.get("result", str(data))
-
+        # analyze ha logica speciale (async + vision LLM)
         if sub == "analyze":
-            # Proxy prende lo screenshot, poi noi lo analizziamo con LLM locale
             b64_data = await self._proxy_call_async("POST", f"{base}/api/rpa/analyze")
             if b64_data.get("result"):
                 return await self._analyze_with_vision(b64_data["result"])
             return "Analisi schermo non disponibile via proxy."
 
-        if sub == "click":
-            coords = self._extract_coords(command) or (500, 300)
-            data = self._proxy_call_sync("POST", f"{base}/api/rpa/click", {
-                "x": coords[0], "y": coords[1], "button": "left", "clicks": 1,
-            })
-            return data.get("result", str(data))
+        route = self._proxy_route(sub, command)
+        if not route:
+            return "Comando RPA non supportato via proxy."
 
-        if sub == "double_click":
-            coords = self._extract_coords(command) or (500, 300)
-            data = self._proxy_call_sync("POST", f"{base}/api/rpa/click", {
-                "x": coords[0], "y": coords[1], "button": "left", "clicks": 2,
-            })
-            return data.get("result", str(data))
+        endpoint, method, args, fmt_result = route
+        data = self._proxy_call_sync(method, f"{base}{endpoint}", args)
+        return fmt_result(data) if fmt_result else data.get("result", str(data))
 
-        if sub == "right_click":
+    def _proxy_route(self, sub: str, command: str):
+        """Restituisce (endpoint, metodo, args, formatter) per un sottocomando proxy."""
+        if sub == "screenshot":
+            return ("/api/rpa/screenshot", "POST", None, None)
+        if sub in ("click", "double_click", "right_click"):
             coords = self._extract_coords(command) or (500, 300)
-            data = self._proxy_call_sync("POST", f"{base}/api/rpa/click", {
-                "x": coords[0], "y": coords[1], "button": "right", "clicks": 1,
-            })
-            return data.get("result", str(data))
-
+            btn = {"click": "left", "double_click": "left", "right_click": "right"}[sub]
+            clk = 2 if sub == "double_click" else 1
+            return ("/api/rpa/click", "POST", {"x": coords[0], "y": coords[1], "button": btn, "clicks": clk}, None)
         if sub == "type":
             text = self._extract_text_to_type(command) or "testo"
-            data = self._proxy_call_sync("POST", f"{base}/api/rpa/type", {"text": text})
-            return data.get("result", str(data))
-
+            return ("/api/rpa/type", "POST", {"text": text}, None)
         if sub == "hotkey":
             keys = self._extract_keys(command) or ["ctrl", "s"]
-            data = self._proxy_call_sync("POST", f"{base}/api/rpa/hotkey", {"keys": keys})
-            return data.get("result", str(data))
-
+            return ("/api/rpa/hotkey", "POST", {"keys": keys}, None)
         if sub == "open_app":
             m = re.search(r"(?:apri|avvia|lancia|open|launch|start)\s+(.+)", command.lower())
             app = m.group(1).strip() if m else command
-            data = self._proxy_call_sync("POST", f"{base}/api/rpa/open_app", {"app": app})
-            return data.get("result", str(data))
-
+            return ("/api/rpa/open_app", "POST", {"app": app}, None)
         if sub == "open_file":
             path_m = re.search(r"([A-Za-z]:\\[\w\\\.\-_ ]+|/[\w/\.\-_ ]+)", command)
-            path = path_m.group(1) if path_m else command
-            app = "code" if "code" in command.lower() else None
-            payload = {"path": path}
-            if app:
-                payload["app"] = app
-            data = self._proxy_call_sync("POST", f"{base}/api/rpa/open_file", payload)
-            return data.get("result", str(data))
-
+            payload = {"path": path_m.group(1) if path_m else command}
+            if "code" in command.lower():
+                payload["app"] = "code"
+            return ("/api/rpa/open_file", "POST", payload, None)
         if sub == "scroll":
             direction = "up" if any(w in command.lower() for w in ("su", "alto", "up")) else "down"
             m = re.search(r"(\d+)", command)
-            clicks = int(m.group(1)) if m else 3
-            data = self._proxy_call_sync("POST", f"{base}/api/rpa/scroll", {
-                "direction": direction, "clicks": clicks,
-            })
-            return data.get("result", str(data))
-
+            return ("/api/rpa/scroll", "POST", {"direction": direction, "clicks": int(m.group(1)) if m else 3}, None)
         if sub == "drag":
             coords_all = re.findall(r"\(?\s*(\d+)\s*,\s*(\d+)\s*\)?", command)
-            if len(coords_all) >= 2:
-                data = self._proxy_call_sync("POST", f"{base}/api/rpa/drag", {
-                    "x1": int(coords_all[0][0]), "y1": int(coords_all[0][1]),
-                    "x2": int(coords_all[1][0]), "y2": int(coords_all[1][1]),
-                })
-                return data.get("result", str(data))
-            return "Specifica origine e destinazione per il drag."
-
+            if len(coords_all) < 2:
+                return None
+            return ("/api/rpa/drag", "POST", {
+                "x1": int(coords_all[0][0]), "y1": int(coords_all[0][1]),
+                "x2": int(coords_all[1][0]), "y2": int(coords_all[1][1]),
+            }, None)
         if sub == "screen_info":
-            data = self._proxy_call_sync("GET", f"{base}/api/rpa/screen_info")
-            result = data.get("result", {})
-            if isinstance(result, dict):
-                return f"Risoluzione: {result.get('width')}x{result.get('height')}, Mouse: ({result.get('mouse_x')},{result.get('mouse_y')})"
-            return str(data)
-
-        return "Comando RPA non supportato via proxy."
+            return ("/api/rpa/screen_info", "GET", None,
+                    lambda d: f"Risoluzione: {d.get('result', {}).get('width')}x{d.get('result', {}).get('height')}, "
+                              f"Mouse: ({d.get('result', {}).get('mouse_x')},{d.get('result', {}).get('mouse_y')})"
+                              if isinstance(d.get("result"), dict) else str(d))
+        return None
 
     def _proxy_call_sync(self, method: str, url: str, json_data: dict | None = None) -> dict:
         """Chiamata HTTP sincrona al proxy RPA (usata dentro executor)."""

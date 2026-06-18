@@ -32,3 +32,6 @@ globe-40.gif.webp
 *~
 .DS_Store
 Thumbs.db
+
+# 🔑 Environment variables with secrets
+.env

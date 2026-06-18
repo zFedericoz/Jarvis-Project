@@ -26,26 +26,32 @@ class ChatManager:
 
     def _init_db(self):
         with self._lock, self._conn() as conn:
-            conn.executescript("""
-                CREATE TABLE IF NOT EXISTS sessions (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    user_id TEXT NOT NULL DEFAULT 'default_user',
-                    title TEXT NOT NULL DEFAULT 'Nuova chat',
-                    created_at TEXT NOT NULL,
-                    updated_at TEXT NOT NULL
-                );
-                CREATE TABLE IF NOT EXISTS messages (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    session_id INTEGER NOT NULL,
-                    role TEXT NOT NULL,
-                    content TEXT NOT NULL,
-                    intent TEXT DEFAULT '',
-                    created_at TEXT NOT NULL,
-                    FOREIGN KEY (session_id) REFERENCES sessions(id) ON DELETE CASCADE
-                );
-                CREATE INDEX IF NOT EXISTS idx_sessions_user_id ON sessions(user_id);
-                CREATE INDEX IF NOT EXISTS idx_messages_session_id ON messages(session_id);
-            """)
+            conn.execute("""CREATE TABLE IF NOT EXISTS sessions (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id TEXT NOT NULL DEFAULT 'default_user',
+                title TEXT NOT NULL DEFAULT 'Nuova chat',
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            )""")
+            conn.execute("""CREATE TABLE IF NOT EXISTS messages (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                session_id INTEGER NOT NULL,
+                role TEXT NOT NULL,
+                content TEXT NOT NULL,
+                intent TEXT DEFAULT '',
+                created_at TEXT NOT NULL,
+                FOREIGN KEY (session_id) REFERENCES sessions(id) ON DELETE CASCADE
+            )""")
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_messages_session_id ON messages(session_id)")
+            # Migration: add user_id column if missing (pre-existing DBs)
+            try:
+                conn.execute("ALTER TABLE sessions ADD COLUMN user_id TEXT NOT NULL DEFAULT 'default_user'")
+            except Exception:
+                pass
+            try:
+                conn.execute("CREATE INDEX IF NOT EXISTS idx_sessions_user_id ON sessions(user_id)")
+            except Exception:
+                pass
             conn.commit()
 
     def _validate_ownership(self, session_id: int) -> bool:
