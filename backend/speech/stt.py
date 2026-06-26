@@ -7,13 +7,25 @@ logger = logging.getLogger("jarvis.speech.stt")
 
 class SpeechToText:
     """
-    Speech-to-text con faster-whisper.
+    Speech-to-text con faster-whisper su GPU.
 
-    Modelli consigliati:
-      - tiny   : ~75 MB RAM, veloce, qualità bassa (sconsigliato per italiano)
-      - base   : ~150 MB RAM, buon bilanciamento qualità/velocità  ← consigliato su CPU
-      - small  : ~500 MB RAM, ottimo per italiano, accettabile su CPU
-      - medium : ~1.5 GB RAM, ottimo, lento su CPU (usalo con GPU)
+    Trade-off modelli per GPU consumer (8-12 GB VRAM, realtime):
+
+      tiny   (~75 MB)  — troppo impreciso, specialmente in italiano.
+                          Sconsigliato anche su GPU.
+      base   (~150 MB) — buon equilibrio, trascrizione sub-50ms su GPU.
+                          Accettabile, ma "small" offre molto più per pochi MB.
+      small  (~500 MB) — scelta consigliata. Eccellente per italiano,
+                          trascrizione ~50-100ms su GPU float16.
+                          Lascia VRAM libera per XTTS e vision.
+      medium (~1.5 GB) — qualità massima, trascrizione ~100-200ms su GPU.
+                          Consumano ~1 GB di VRAM in più; consigliato solo
+                          se la precisione è critica e XTTS/vision non servono
+                          contemporaneamente.
+
+    Conclusione: "small" è il default perché offre il miglior rapporto
+    qualità/velocità/VRAM in un sistema che carica anche XTTS e YOLO.
+    Con GPU + float16 è ~5x più veloce di CPU + int8.
     """
 
     def __init__(self, config: dict | None = None):
@@ -23,9 +35,9 @@ class SpeechToText:
                 config = yaml.safe_load(f)
 
         stt_cfg = config["speech"]["stt"]
-        model_size = stt_cfg.get("model", "base")       # era "tiny" → passato a "base"
-        device = stt_cfg.get("device", "cpu")
-        compute_type = stt_cfg.get("compute_type", "int8")
+        model_size = stt_cfg.get("model", "small")
+        device = stt_cfg.get("device", "cuda")
+        compute_type = stt_cfg.get("compute_type", "float16")
 
         # Lingua fissa o auto-detection
         self.default_language = stt_cfg.get("language", None)

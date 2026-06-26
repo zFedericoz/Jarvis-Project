@@ -28,9 +28,13 @@ class LLMClient:
         self.temperature = llm_cfg["temperature"]
         self.num_gpu = llm_cfg.get("num_gpu", -1)
 
-        with open("config/persona.yaml") as f:
-            persona = yaml.safe_load(f)
-        self.system_prompt = persona["system_prompt"]
+        try:
+            from services.personality import get_system_prompt
+            self.system_prompt = get_system_prompt()
+        except Exception:
+            with open("config/persona.yaml") as f:
+                persona = yaml.safe_load(f)
+            self.system_prompt = persona["system_prompt"]
 
         host = llm_cfg["host"]
         self.client = ollama.Client(host=host)

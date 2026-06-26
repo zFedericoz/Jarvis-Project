@@ -110,14 +110,22 @@ class TextToSpeech:
         return None
 
     async def synthesize_async(self, text: str, language: str = "it") -> bytes | None:
-        """Versione asincrona — usa Kokoro se disponibile, altrimenti edge-tts."""
+        """
+        Versione asincrona — stesso ordine di priorità di synthesize().
+        Kokoro e XTTS sono eseguiti in executor per non bloccare l'event loop.
+        """
         if not text or not text.strip():
             return None
 
+        loop = asyncio.get_event_loop()
+
         if self._kokoro_available:
-            # Kokoro è sincrono, giralo in executor per non bloccare l'event loop
-            loop = asyncio.get_event_loop()
             result = await loop.run_in_executor(None, self._synthesize_kokoro, text, language)
+            if result:
+                return result
+
+        if self._xtts_available and self.voice_sample.exists():
+            result = await loop.run_in_executor(None, self._synthesize_xtts, text, language)
             if result:
                 return result
 
@@ -174,11 +182,32 @@ class TextToSpeech:
     def _get_xtts_model(self):
         # Import qui per evitare import pesante a startup
         from TTS.api import TTS as CoquiTTS
-        # Singleton
+        # Singleton — una volta caricato in GPU, resta lì per tutte le chiamate
         if not hasattr(self, "_xtts_instance") or self._xtts_instance is None:
             self._xtts_instance = CoquiTTS("tts_models/multilingual/multi-dataset/xtts_v2").to(self.device)
-            logger.info("XTTS model caricato")
+            logger.info("XTTS model caricato su %s", self.device)
         return self._xtts_instance
+
+    def warmup_xtts(self):
+        """
+        Carica XTTS in GPU all'avvio (in un executor), così la prima
+        richiesta vocale dell'utente non subisce la latenza del loading.
+        Da chiamare in background durante _warmup_all() in main.py.
+        """
+        try:
+            self._get_xtts_model()
+            try:
+                import torch
+                if torch.cuda.is_available():
+                    logger.info(
+                        "XTTS GPU memory allocata: %.1f GB",
+                        torch.cuda.memory_allocated() / 1024 ** 3,
+                    )
+            except Exception:
+                pass
+            logger.info("XTTS warmup completato")
+        except Exception as e:
+            logger.warning("XTTS warmup fallito (verrà ricaricato on-demand): %s", e)
 
     def _synthesize_xtts(self, text: str, language: str = "it") -> bytes | None:
         try:

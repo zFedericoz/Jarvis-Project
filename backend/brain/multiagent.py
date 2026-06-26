@@ -107,7 +107,7 @@ _REFLECTION_INTENTS = {"code", "research", "creative"}
 
 _SUMMARY_THRESHOLD = 4000
 
-_semantic_cache = SemanticCache(max_entries=500, ttl_seconds=3600)
+_semantic_cache = SemanticCache(max_entries=2000, ttl_seconds=14400)  # 4h TTL, 2000 entry
 
 
 def _toolcall_to_dict(tc) -> dict:

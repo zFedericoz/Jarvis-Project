@@ -1,6 +1,7 @@
 import { useRef, useState, useEffect, useCallback } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
 import { useStore } from '../hooks/useStore'
+import HolographicHUD from './hologram/HolographicHUD'
 import { JARVIS_COLORS, API_URL } from '../utils/constants'
 import type { WSMessage } from '../types'
 
@@ -62,6 +63,11 @@ export default function ChatPanel() {
   const [attachedFiles, setAttachedFiles] = useState<{ name: string; content: string }[]>([])
   const inputRef = useRef<HTMLInputElement>(null!)
   const fileInputRef = useRef<HTMLInputElement>(null!)
+
+  const status = useStore((s) => s.status)
+  const volume = useStore((s) => s.volume)
+  const isResponding = status === 'processing' || status === 'speaking'
+  const isListening = status === 'listening'
 
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: 'smooth' })
@@ -163,6 +169,17 @@ export default function ChatPanel() {
       padding: 12,
       backdropFilter: 'blur(10px)',
     }}>
+      <div style={{
+        display: 'flex', alignItems: 'center', marginBottom: 8, gap: 10,
+        paddingBottom: 8, borderBottom: `1px solid ${JARVIS_COLORS.primary}22`,
+      }}>
+        <div style={{ width: 120, height: 120, borderRadius: 4, overflow: 'hidden', flexShrink: 0 }}>
+          <HolographicHUD isResponding={isResponding} isListening={isListening} volume={volume} />
+        </div>
+        <div style={{ flex: 1, fontSize: 11, fontFamily: "'Share Tech Mono', monospace", color: JARVIS_COLORS.textDim }}>
+          {isResponding ? 'JARVIS sta rispondendo...' : isListening ? 'JARVIS ti ascolta...' : 'Sistemi pronti'}
+        </div>
+      </div>
       <div style={{ flex: 1, overflowY: 'auto', marginBottom: 8 }}>
         <AnimatePresence>
           {messages.map((msg, i) => (

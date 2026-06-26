@@ -66,13 +66,13 @@ server:
   port: 8765
 speech:
   stt:
-    compute_type: int8
-    device: cpu
+    compute_type: float16
+    device: cuda
     engine: faster-whisper
     language: auto
     model: small
   tts:
-    device: cpu
+    device: cuda
     engine: kokoro
     fallback:
       engine: edge-tts

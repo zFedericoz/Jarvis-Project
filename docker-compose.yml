@@ -18,6 +18,7 @@ services:
   backend:
     build:
       context: ./backend
+      # Usa Dockerfile.cuda per GPU NVIDIA, Dockerfile per CPU
       dockerfile: Dockerfile
     ports:
       - "8765:8765"
@@ -31,12 +32,21 @@ services:
       - OLLAMA_HOST=http://host.docker.internal:11434
       - REDIS_HOST=redis
       - REDIS_PASSWORD=${REDIS_PASSWORD}
+      - NVIDIA_VISIBLE_DEVICES=${NVIDIA_VISIBLE_DEVICES:-}
     depends_on:
       redis:
         condition: service_healthy
     restart: unless-stopped
     networks:
       - jarvis-net
+    # Scommentare per abilitare GPU NVIDIA:
+    # deploy:
+    #   resources:
+    #     reservations:
+    #       devices:
+    #         - driver: nvidia
+    #           count: all
+    #           capabilities: [gpu]
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8765/api/status', timeout=3)"]
       start_period: 600s

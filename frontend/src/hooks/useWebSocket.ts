@@ -11,6 +11,12 @@ interface UseWebSocketProps {
 export function useWebSocket({ onMessage, onAudioData, onStatusChange }: UseWebSocketProps) {
   const ws = useRef<WebSocket | null>(null)
   const reconnectTimeout = useRef<number>()
+  const onMessageRef = useRef(onMessage)
+  const onAudioDataRef = useRef(onAudioData)
+  const onStatusChangeRef = useRef(onStatusChange)
+  onMessageRef.current = onMessage
+  onAudioDataRef.current = onAudioData
+  onStatusChangeRef.current = onStatusChange
 
   const connect = useCallback(() => {
     if (ws.current?.readyState === WebSocket.OPEN) return
@@ -20,16 +26,16 @@ export function useWebSocket({ onMessage, onAudioData, onStatusChange }: UseWebS
     socket.binaryType = 'blob'
 
     socket.onopen = () => {
-      onStatusChange?.(true)
+      onStatusChangeRef.current?.(true)
     }
 
     socket.onmessage = (event) => {
       if (event.data instanceof Blob) {
-        onAudioData?.(event.data)
+        onAudioDataRef.current?.(event.data)
       } else {
         try {
           const msg: WSMessage = JSON.parse(event.data)
-          onMessage(msg)
+          onMessageRef.current(msg)
         } catch {
           console.warn('Unknown message:', event.data)
         }
@@ -37,7 +43,7 @@ export function useWebSocket({ onMessage, onAudioData, onStatusChange }: UseWebS
     }
 
     socket.onclose = () => {
-      onStatusChange?.(false)
+      onStatusChangeRef.current?.(false)
       reconnectTimeout.current = window.setTimeout(connect, 2000)
     }
 
@@ -46,7 +52,7 @@ export function useWebSocket({ onMessage, onAudioData, onStatusChange }: UseWebS
     }
 
     ws.current = socket
-  }, [onMessage, onAudioData, onStatusChange])
+  }, [])
 
   useEffect(() => {
     connect()

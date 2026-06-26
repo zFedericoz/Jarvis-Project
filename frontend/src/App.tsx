@@ -1,4 +1,5 @@
 import { useState, useEffect, useRef, useCallback, type FormEvent } from "react";
+import { Canvas } from "@react-three/fiber";
 import Sidebar from "./components/Sidebar";
 import { ArcReactor3D } from "./components/ArcReactor3D";
 import { MarkdownRenderer } from "./components/MarkdownRenderer";
@@ -9,11 +10,19 @@ import { SystemLog } from "./components/SystemLog";
 import { Waveform } from "./components/Waveform";
 import { ConfirmModal } from "./components/ConfirmModal";
 import MarketPanel from "./components/MarketPanel";
+import ParticleField from "./components/ParticleField";
+import VoiceVisualizer from "./components/VoiceVisualizer";
+import HolographicDisplay from "./components/HolographicDisplay";
 import { useStore } from "./hooks/useStore";
+import { useWebSocket } from "./hooks/useWebSocket";
+import { useWakeWord } from "./hooks/useWakeWord";
+import { useAudioStream } from "./hooks/useAudioStream";
 import { fetchFromBest } from "./utils/fetch";
 import { THEMES, C, setTheme as applyTheme, font, mono } from "./utils/theme";
 import VectorViz from "./components/VectorViz";
-import { API_URL } from "./utils/constants";
+import TypewriterText from "./components/TypewriterText";
+import { API_URL, JARVIS_COLORS } from "./utils/constants";
+import type { WSMessage } from "./types";
 
 const HOST_METRICS_URL = "http://localhost:18765";
 
@@ -26,8 +35,6 @@ interface MetricSnapshot {
 
 export default function JarvisDashboard() {
   const [metrics, setMetrics] = useState<MetricSnapshot | null>(null);
-  const [listening, setListening] = useState(false);
-  const [isResponding, setIsResponding] = useState(false);
   const [chatInput, setChatInput] = useState("");
   const [messages, setMessages] = useState<{id:number;role:string;text:string;sources?:any[];commands?:string[]}[]>([
     {id:0,role:"system",text:"Sistemi ausiliari inizializzati. Reattore ARC stabile. In attesa di comandi, Signore."}
@@ -64,6 +71,74 @@ export default function JarvisDashboard() {
   const chatContainerRef = useRef<HTMLDivElement>(null!);
   const fileInputRef = useRef<HTMLInputElement>(null!);
   const abortRef = useRef<AbortController | null>(null);
+
+  // ── Stato unificato vocale/testuale ──────────────────────────────────
+  const storeStatus = useStore((s) => s.status);
+  const storeVolume = useStore((s) => s.volume);
+  const setStoreStatus = useStore((s) => s.setStatus);
+  const setStoreVolume = useStore((s) => s.setVolume);
+  const setStoreConnected = useStore((s) => s.setConnected);
+  const [voiceEnabled, setVoiceEnabled] = useState(false);
+  const [textResponding, setTextResponding] = useState(false);
+  const listening = storeStatus === "listening";
+  const isResponding = textResponding || storeStatus === "processing" || storeStatus === "speaking";
+
+  // ── Hooks voce ───────────────────────────────────────────────────────
+  // Ref ponte: useAudioStream chiama sendAudio da useWebSocket senza creare dipendenze
+  const sendAudioRef = useRef<(data: ArrayBuffer) => void>(() => {});
+  const startRecRef = useRef<() => void>(() => {});
+  const stopRecRef = useRef<() => void>(() => {});
+
+  const handleWSMessage = useCallback((msg: WSMessage) => {
+    if (msg.type === "transcription") {
+      const uid = msgIdRef.current++;
+      setMessages((p) => [...p, { id: uid, role: "user", text: msg.text || "" }]);
+      setStoreStatus("processing");
+    } else if (msg.type === "response") {
+      const rid = msgIdRef.current++;
+      const m = msg as any;
+      setMessages((p) => [...p, { id: rid, role: "system", text: m.text || "", sources: m.sources }]);
+      setStoreStatus("speaking");
+    } else if (msg.type === "speaking_end") {
+      setStoreStatus("idle");
+    } else if (msg.type === "error") {
+      setStoreStatus("idle");
+    }
+  }, [setStoreStatus]);
+
+  const { sendAudio } = useWebSocket({
+    onMessage: handleWSMessage,
+    onAudioData: useCallback((blob: Blob) => {
+      const url = URL.createObjectURL(blob);
+      const audio = new Audio(url);
+      audio.onended = () => setStoreStatus("idle");
+      audio.play().catch(() => setStoreStatus("idle"));
+    }, [setStoreStatus]),
+    onStatusChange: useCallback((connected: boolean) => setStoreConnected(connected), [setStoreConnected]),
+  });
+  sendAudioRef.current = sendAudio;
+
+  const { startRecording, stopRecording } = useAudioStream({
+    onAudioData: useCallback((data: ArrayBuffer) => sendAudioRef.current(data), []),
+    onVolumeChange: useCallback((vol: number) => setStoreVolume(vol), [setStoreVolume]),
+  });
+  startRecRef.current = startRecording;
+  stopRecRef.current = stopRecording;
+
+  const handleWake = useCallback(() => {
+    setStoreStatus("listening");
+    startRecRef.current();
+  }, [setStoreStatus]);
+
+  const canWake = voiceEnabled && storeStatus === "idle" && !textResponding;
+  useWakeWord({ onWake: handleWake, enabled: canWake });
+
+  const toggleVoice = useCallback(() => {
+    setVoiceEnabled((v) => {
+      if (v) { stopRecRef.current(); setStoreStatus("idle"); }
+      return !v;
+    });
+  }, [setStoreStatus]);
 
   const { activeSessionId, chatHistory, setChatHistory, addChatHistory } = useStore();
 
@@ -188,7 +263,10 @@ export default function JarvisDashboard() {
       abortRef.current.abort();
       abortRef.current = null;
     }
-    setIsResponding(false);
+    setTextResponding(false);
+    if (storeStatus === "speaking" || storeStatus === "processing") {
+      setStoreStatus("idle");
+    }
   };
 
   const handleAuth = async (e: React.FormEvent) => {
@@ -234,7 +312,7 @@ export default function JarvisDashboard() {
     setMessages(p => [...p, {id:uid,role:"user",text:userMsg}]);
     setChatInput("");
     setAttachedFiles([]);
-    setIsResponding(true);
+    setTextResponding(true);
 
     let sid = 0;
     let sessionIdReturned: number | null = null;
@@ -253,7 +331,7 @@ export default function JarvisDashboard() {
       if (!r.ok) throw new Error(`HTTP ${r.status}`);
 
       const reader = r.body?.getReader();
-      if (!reader) { setIsResponding(false); return; }
+      if (!reader) { setTextResponding(false); return; }
       const decoder = new TextDecoder();
       let buffer = "";
       let responseText = "";
@@ -304,7 +382,7 @@ export default function JarvisDashboard() {
         setMessages(p => [...p, {id:eid,role:"system",text:"Errore di connessione al server. Verifica che il backend sia in esecuzione."}]);
       }
     }
-    setIsResponding(false);
+    setTextResponding(false);
   };
 
   useEffect(() => {
@@ -333,9 +411,45 @@ export default function JarvisDashboard() {
     <div style={{background:C.bg,height:"100vh",width:"100vw",overflow:"hidden",fontFamily:font,color:C.text,position:"relative",display:"flex",flexDirection:"column",boxSizing:"border-box"}}>
       <Scanlines theme={theme} />
 
+      {/* ── Particelle 3D di sfondo ── */}
+      <div style={{position:"fixed",inset:0,zIndex:0,pointerEvents:"none",opacity:0.4}}>
+        <Canvas camera={{position:[0,0,12],fov:60}}>
+          <ParticleField />
+        </Canvas>
+      </div>
+
+      {/* ── Ologramma compatto nella toolbar ── */}
+      {voiceEnabled && (
+        <div style={{position:"fixed",top:50,right:14,zIndex:200,width:80,height:80,pointerEvents:"none"}}>
+          <Canvas camera={{position:[0,0,6],fov:50}}>
+            <HolographicDisplay />
+          </Canvas>
+        </div>
+      )}
+
+      {/* ── VoiceVisualizer overlay nel tab reattore ── */}
+      {(storeStatus === "listening" || storeStatus === "speaking") && (
+        <div style={{position:"fixed",bottom:100,left:"50%",transform:"translateX(-50%)",width:"60%",maxWidth:500,height:80,zIndex:150,pointerEvents:"none"}}>
+          <Canvas camera={{position:[0,0,5],fov:50}}>
+            <VoiceVisualizer />
+          </Canvas>
+        </div>
+      )}
+
       <div style={{flexShrink:0,display:"flex",alignItems:"center",gap:10,padding:"6px 14px",borderBottom:`1px solid ${C.border}`,background:C.bgPanel}}>
-        <div style={{flexShrink:0,marginRight:4}}>
+        <div style={{flexShrink:0,marginRight:4,display:"flex",alignItems:"center",gap:6}}>
           <span style={{fontSize:15,letterSpacing:"0.3em",color:C.cyan,fontWeight:"bold",fontFamily:mono}}>J.A.R.V.I.S</span>
+          {voiceEnabled && (
+            <span style={{
+              fontSize:9,fontFamily:mono,letterSpacing:"0.1em",
+              color: listening ? C.green : storeStatus === "processing" ? C.amber : C.cyan,
+              background: (listening||storeStatus!=="idle") ? `${C.cyan}15` : "transparent",
+              padding:"1px 6px",borderRadius:3,border:`1px solid ${listening?C.green:storeStatus!=="idle"?C.cyan:"transparent"}`,
+              transition:"all 0.3s",
+            }}>
+              {listening ? "ASCOLTO" : storeStatus === "processing" ? "ELABORAZIONE" : storeStatus === "speaking" ? "VOCE" : "VOCALE"}
+            </span>
+          )}
         </div>
         <MetricBadge label="CPU" value={Math.round(cpu)} unit="%" color={C.cyan} history={cpuHist} />
         <MetricBadge label="RAM" value={Math.round(ram)} unit="%" color={C.green} history={ramHist} />
@@ -426,7 +540,13 @@ export default function JarvisDashboard() {
                       <span style={{fontSize:10,color:msg.role==="user"?C.cyan:C.green,display:"block",marginBottom:1,fontFamily:mono,letterSpacing:"0.05em"}}>
                         {msg.role==="user" ? "TU" : "J.A.R.V.I.S."}
                       </span>
-                      {msg.role === "system" ? <MarkdownRenderer content={msg.text} /> : msg.text}
+                      {msg.role === "system" ? (
+                        isResponding && i === arr.length - 1 ? (
+                          <span><TypewriterText text={msg.text} speed={8} /></span>
+                        ) : (
+                          <MarkdownRenderer content={msg.text} />
+                        )
+                      ) : msg.text}
                       {msg.role==="system" && prevUser && (
                         <div style={{display:"flex",gap:4,marginTop:4}}>
                           <span onClick={() => !feedbackSent[msg.id] && sendFeedback(msg.id,2,prevUser.text,msg.text)}
@@ -473,11 +593,14 @@ export default function JarvisDashboard() {
               )}
 
               <div style={{flexShrink:0,display:"flex",gap:8,alignItems:"center"}}>
-                <button onClick={()=>setListening(!listening)} style={{width:36,height:36,borderRadius:"50%",background:listening?C.cyanFaint:"transparent",border:`1px solid ${listening?C.cyan:C.border}`,color:listening?C.cyan:C.textDim,cursor:"pointer",display:"flex",alignItems:"center",justifyContent:"center",flexShrink:0,fontSize:14}}>
-                  {listening ? "●" : "🎤"}
+                <button onClick={toggleVoice} style={{width:36,height:36,borderRadius:"50%",background:voiceEnabled?C.cyanFaint:"transparent",border:`1px solid ${voiceEnabled?C.cyan:C.border}`,color:voiceEnabled?C.cyan:C.textDim,cursor:"pointer",display:"flex",alignItems:"center",justifyContent:"center",flexShrink:0,fontSize:14,position:"relative"}}>
+                  {voiceEnabled ? (listening ? "●" : "◉") : "🎤"}
+                  {voiceEnabled && !listening && storeStatus === "idle" && (
+                    <span style={{position:"absolute",top:-2,right:-2,width:8,height:8,borderRadius:"50%",background:C.green,opacity:0.8}} />
+                  )}
                 </button>
                 <div style={{flex:1,background:C.bgPanel,border:`1px solid ${C.border}`,borderRadius:16,padding:"0 12px",height:32,display:"flex",alignItems:"center"}}>
-                  <Waveform active={listening||isResponding} color={isResponding?C.green:C.cyan} />
+                  <Waveform active={voiceEnabled||isResponding} color={isResponding?C.green:voiceEnabled?C.cyan:C.textDim} />
                 </div>
               </div>
 

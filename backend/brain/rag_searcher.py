@@ -5,11 +5,11 @@ logger = logging.getLogger("jarvis.brain.rag_searcher")
 _CHARS_PER_TOKEN = 4
 
 # Shared RAG distance threshold (adjustable at runtime)
-rag_distance_threshold: float = 1.2
+rag_distance_threshold: float = 1.0  # Più selettivo (distanza minore = più pertinente)
 
 
 class RAGSearcher:
-    def __init__(self, memory, distance_threshold=None, char_budget=4800):
+    def __init__(self, memory, distance_threshold=None, char_budget=6000):
         self._mem = memory
         self._distance_threshold = distance_threshold
         self._char_budget = char_budget

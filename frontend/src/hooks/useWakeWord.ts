@@ -13,6 +13,8 @@ export function useWakeWord({ onWake, enabled }: UseWakeWordProps) {
   const audioCtx = useRef<AudioContext | null>(null)
   const processor = useRef<ScriptProcessorNode | null>(null)
   const source = useRef<MediaStreamAudioSourceNode | null>(null)
+  const onWakeRef = useRef(onWake)
+  onWakeRef.current = onWake
 
   const connect = useCallback(async () => {
     if (!enabled) return
@@ -53,7 +55,7 @@ export function useWakeWord({ onWake, enabled }: UseWakeWordProps) {
           const msg = JSON.parse(event.data)
           if (msg.type === 'wake') {
             cleanup()
-            onWake()
+            onWakeRef.current()
           }
         } catch {}
       }
@@ -64,7 +66,7 @@ export function useWakeWord({ onWake, enabled }: UseWakeWordProps) {
     } catch (err) {
       console.error('Wake word mic error:', err)
     }
-  }, [enabled, onWake])
+  }, [enabled])
 
   const cleanup = useCallback(() => {
     processor.current?.disconnect()

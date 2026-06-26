@@ -22,8 +22,12 @@ soundfile>=0.12.1
 # TTS fallback cloud
 edge-tts>=6.1.9
 
-# TTS voice cloning (opzionale — richiede PyTorch ~2GB)
-# TTS>=0.22.0
+# PyTorch con CUDA 12.4 (per GPU NVIDIA)
+# Installazione: pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu124
+# torch>=2.0.0  # scommentare per CPU-only
+
+# TTS voice cloning (XTTS v2)
+TTS>=0.22.0
 
 # Memory
 redis>=5.0.0
@@ -45,9 +49,13 @@ duckduckgo-search>=6.0.0
 
 # Config
 pyyaml>=6.0.1
+python-dotenv>=1.0.0
 
-# Vision (opzionale — richiede PyTorch ~2GB)
-# ultralytics>=8.2.0
+# Vision (YOLOv8 — include opencv-python come dipendenza)
+ultralytics>=8.2.0
+
+# Spotify Web API
+spotipy>=2.24.0
 
 # Wake word (installazione separata — no PyPI)
 pvporcupine==1.9.5

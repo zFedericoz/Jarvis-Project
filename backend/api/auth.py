@@ -12,6 +12,8 @@ from jose import JWTError, jwt
 logger = logging.getLogger("jarvis.api.auth")
 
 SECRET_KEY = os.getenv("JWT_SECRET", "jarvis-dev-secret-change-in-production")
+if SECRET_KEY == "jarvis-dev-secret-change-in-production":
+    logger.warning("JWT_SECRET non impostato in .env! Usare una chiave segreta forte in produzione.")
 ALGORITHM = "HS256"
 ACCESS_TOKEN_EXPIRE_MINUTES = 60 * 24 * 7  # 7 days
 

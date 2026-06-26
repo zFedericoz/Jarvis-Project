@@ -3,6 +3,10 @@ import json
 import logging
 import sys
 from datetime import datetime, timezone
+from dotenv import load_dotenv
+
+load_dotenv()
+
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
@@ -133,6 +137,55 @@ async def get_briefing_audio():
     return {"status": "error", "message": "Nessun briefing disponibile"}
 
 
+# ── Face Auth endpoints ─────────────────────────────────────────────
+@app.get("/api/face/list")
+async def face_list():
+    from services.face_auth.face_auth import get_face_auth
+    return {"faces": get_face_auth().list_faces()}
+
+
+@app.post("/api/face/register")
+async def face_register(name: str):
+    from services.face_auth.face_auth import get_face_auth
+    return {"status": "not_implemented", "note": "Usa POST /api/face/register con form-data (file image)"}
+
+
+@app.delete("/api/face/{name}")
+async def face_delete(name: str):
+    from services.face_auth.face_auth import get_face_auth
+    ok = get_face_auth().delete_face(name)
+    return {"status": "deleted" if ok else "not_found"}
+
+
+@app.get("/api/face/recognize")
+async def face_recognize():
+    """Riconoscimento facciale via webcam (richiede face_recognition + webcam accessibile)."""
+    return {"info": "Usa WebSocket per streaming video"}
+
+
+# ── Home Assistant endpoints ────────────────────────────────────────
+@app.get("/api/ha/entities")
+async def ha_list_entities():
+    from plugins.homeassistant.ha_plugin import HomeAssistantPlugin
+    p = HomeAssistantPlugin()
+    return await p.execute("list_entities", {})
+
+
+@app.post("/api/ha/{entity_id}/{action}")
+async def ha_action(entity_id: str, action: str):
+    from plugins.homeassistant.ha_plugin import HomeAssistantPlugin
+    p = HomeAssistantPlugin()
+    return await p.execute(action, {"entity_id": entity_id})
+
+
+# ── Broadcast (proactive notifications) ─────────────────────────────
+@app.post("/api/broadcast")
+async def broadcast_message(body: dict):
+    from api.websocket_manager import manager as ws_manager
+    await ws_manager.broadcast(json.dumps(body))
+    return {"status": "broadcasted"}
+
+
 # ──────────────────────────────────────────────
 # Startup / Shutdown
 # ──────────────────────────────────────────────
@@ -202,10 +255,82 @@ async def _warmup_all(config):
         briefing.start()
         app.state.briefing = briefing
 
+        # ── Step 4: Voice loop (wake word sempre attivo) ──
+        try:
+            from services.voice_loop.voice_loop import VoiceLoop
+            voice = VoiceLoop(config, llm, speech["stt"], speech["tts"], persistent_mem, ws_manager)
+            voice.start()
+            app.state.voice_loop = voice
+            logger.info("  Voice loop avviato (wake word sempre attivo)")
+        except Exception as e:
+            logger.warning(f"  Voice loop init fallito: {e}")
+
+        # ── Step 5: Proactive intelligence ────────────────
+        try:
+            from services.proactive.proactive import get_proactive_engine
+            pro = get_proactive_engine(config)
+            pro.start()
+            app.state.proactive = pro
+            logger.info("  Proactive engine avviato")
+        except Exception as e:
+            logger.warning(f"  Proactive engine init fallito: {e}")
+
+        # ── Step 6: Proactive system monitor ──────────────
+        try:
+            from brain.proactive_monitor import get_proactive_monitor
+            monitor = get_proactive_monitor()
+            monitor.start()
+            app.state.proactive_monitor = monitor
+            logger.info("  ProactiveMonitor avviato (metriche ogni 30s)")
+        except Exception as e:
+            logger.warning(f"  ProactiveMonitor init fallito: {e}")
+
         # ── LLM warmup ────────────────────────────────
         logger.info("  LLM warmup (caricamento modello in RAM)...")
         loop = asyncio.get_running_loop()
         await loop.run_in_executor(None, llm.warmup)
+        logger.info("  LLM modello pronto")
+
+        # ── Step 7: Vision monitoring continuo ───────────
+        try:
+            from vision.camera import Camera
+            from api.websocket_manager import manager as ws_manager
+            import json
+            vision_cfg = config.get("vision", {})
+            if vision_cfg.get("enabled", True):
+                cam = Camera(
+                    model_path=vision_cfg.get("model", "yolov8n.pt"),
+                    device=vision_cfg.get("device", "cuda"),
+                    camera_id=vision_cfg.get("camera_id", 0),
+                )
+                cam.start_continuous_monitoring(
+                    callback=lambda msg: asyncio.ensure_future(
+                        ws_manager.broadcast(json.dumps({
+                            "type": "proactive_vision",
+                            "message": msg,
+                        }))
+                    ),
+                    interval_seconds=3,
+                )
+                app.state.vision_camera = cam
+                # Condividi la camera con l'action Vision
+                try:
+                    actions_list = get_actions(config)
+                    if "vision" in actions_list:
+                        actions_list["vision"].set_camera(cam)
+                except Exception:
+                    pass
+                logger.info("  Vision monitoring continuo avviato")
+        except Exception as e:
+            logger.warning(f"  Vision monitoring init fallito: {e}")
+
+        # ── XTTS warmup (voice cloning su GPU) ───────
+        if speech["tts"]._xtts_available:
+            logger.info("  XTTS warmup (caricamento modello su GPU)...")
+            await loop.run_in_executor(None, speech["tts"].warmup_xtts)
+        else:
+            logger.info("  XTTS non disponibile (skip warmup)")
+
         logger.info("  Tutti i componenti pronti")
 
     except Exception as e:
@@ -216,6 +341,31 @@ async def _warmup_all(config):
 @app.on_event("shutdown")
 async def shutdown():
     logger.info("J.A.R.V.I.S. in spegnimento.")
+    if hasattr(app.state, "voice_loop"):
+        try:
+            app.state.voice_loop.stop()
+        except Exception:
+            pass
+    if hasattr(app.state, "proactive"):
+        try:
+            await app.state.proactive.stop()
+        except Exception:
+            pass
+    if hasattr(app.state, "proactive_monitor"):
+        try:
+            await app.state.proactive_monitor.stop()
+        except Exception:
+            pass
+    if hasattr(app.state, "briefing"):
+        try:
+            app.state.briefing.stop()
+        except Exception:
+            pass
+    if hasattr(app.state, "vision_camera"):
+        try:
+            app.state.vision_camera.stop_monitoring()
+        except Exception:
+            pass
 
 
 def main():

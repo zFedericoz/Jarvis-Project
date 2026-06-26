@@ -13,6 +13,10 @@ export function useAudioStream({ onAudioData, onVolumeChange }: UseAudioStreamPr
   const analyser = useRef<AnalyserNode | null>(null)
   const animationId = useRef<number>()
   const audioBuffer = useRef<Int16Array>(new Int16Array(0))
+  const onAudioDataRef = useRef(onAudioData)
+  const onVolumeChangeRef = useRef(onVolumeChange)
+  onAudioDataRef.current = onAudioData
+  onVolumeChangeRef.current = onVolumeChange
 
   const startRecording = useCallback(async () => {
     try {
@@ -48,7 +52,7 @@ export function useAudioStream({ onAudioData, onVolumeChange }: UseAudioStreamPr
         if (audioBuffer.current.length >= threshold) {
           const chunk = audioBuffer.current.slice(0, threshold)
           audioBuffer.current = audioBuffer.current.slice(threshold)
-          onAudioData(chunk.buffer)
+          onAudioDataRef.current(chunk.buffer)
         }
       }
 
@@ -57,14 +61,14 @@ export function useAudioStream({ onAudioData, onVolumeChange }: UseAudioStreamPr
         const data = new Uint8Array(analyser.current.frequencyBinCount)
         analyser.current.getByteFrequencyData(data)
         const avg = data.reduce((a, b) => a + b, 0) / data.length
-        onVolumeChange?.(avg / 255)
+        onVolumeChangeRef.current?.(avg / 255)
         animationId.current = requestAnimationFrame(analyze)
       }
       analyze()
     } catch (err) {
       console.error('Microphone error:', err)
     }
-  }, [onAudioData, onVolumeChange])
+  }, [])
 
   const stopRecording = useCallback(() => {
     processor.current?.disconnect()
