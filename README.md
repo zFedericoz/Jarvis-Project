@@ -3,7 +3,8 @@
 Assistente AI personale ispirato a Iron Man, completamente locale.
 Attivazione vocale ("Jarvis"), input testuale, HUD olografico 3D, risposta vocale.
 
-> **8 step completati**: Core → Memoria → MultiAgent → Git → Terminale → Focus → RPA → Chat Persistente
+> **GPU acceleration**: STT (faster-whisper CUDA), XTTS voice cloning su GPU, YOLO vision
+> **Features**: Streaming TTS progressivo, VAD interrupt, vision monitoring, cache semantica, RAG aggressivo
 
 ## Architettura
 
@@ -23,6 +24,9 @@ Attivazione vocale ("Jarvis"), input testuale, HUD olografico 3D, risposta vocal
 - **Backend**, **Redis**, **Frontend** girano in container Docker
 - Il backend si connette a Ollama via `host.docker.internal:11434`
 - **Chat persistenti**: SQLite (`data/chats.db`) con sessioni multiple, auto-titolo, cronologia
+- **GPU NVIDIA**: supporto CUDA per STT (faster-whisper float16), XTTS voice cloning, YOLO vision
+- **Streaming TTS**: sintesi vocale progressiva — frasi inviate appena pronte, non in blocco
+- **Vision monitoring**: telecamera in background con YOLO, broadcast eventi in tempo reale via WebSocket
 
 ## Requisiti Hardware
 
@@ -149,7 +153,8 @@ https://github.com/Picovoice/porcupine/tree/master/resources/keyword_files/windo
 - Cronologia completa caricata al click sulla sessione
 
 ### Chat intelligente
-- RAG automatico su ChromaDB (memoria a lungo termine)
+- RAG automatico su ChromaDB (memoria a lungo termine) — soglia 1.0, char_budget 6000
+- **Cache semantica**: 2000 entry, TTL 4h, riduce chiamate LLM per domande simili
 - Web search automatico (DuckDuckGo) per domande su notizie/meteo/attualità
 - Routing a 5 specialisti (code, creative, research, action, general)
 - Reflection engine per auto-valutazione qualità (disabilitabile su CPU)
@@ -165,6 +170,23 @@ https://github.com/Picovoice/porcupine/tree/master/resources/keyword_files/windo
 - Linguaggio naturale: `"che versione di Python ho?"` → `python --version`
 - Timeout (15s) e output cappato
 
+### Autenticazione JWT
+- Registrazione e login con password hashata (bcrypt)
+- Token JWT con scadenza configurabile
+- Secret key da `.env` (`JWT_SECRET`), mai hardcoded
+- Protezione endpoint API
+
+### System control sicuro
+- Comandi distruttivi (spegnimento, riavvio) con doppia conferma
+- Matching a word boundary (`\b`) — "sicuramente" non attiva conferma per "si"
+- Logica deny-before-confirm: negazione esplicita blocca prima della conferma
+- Timeout (30s) su conferme pendenti
+
+### Plugin system
+- Plugin Python caricati dinamicamente da `plugins/`
+- API hook: `on_startup`, `on_message`, `on_shutdown`
+- Plugin inclusi: `weather_alert` (meteo via wttr.in), `smart_timer` (timer/promemoria in memoria)
+
 ### Focus mode (Pomodoro)
 - Lavoro 25min → pausa breve 5min → pausa lunga 15min ogni 4 cicli
 - Blocco siti distraenti via hosts file di Windows
@@ -178,10 +200,23 @@ https://github.com/Picovoice/porcupine/tree/master/resources/keyword_files/windo
 - Scroll, drag & drop, info schermo
 - Tutto via comando vocale in linguaggio naturale
 
+### Vision (YOLO + telecamera)
+- Rilevamento oggetti in tempo reale con YOLOv8 su GPU
+- **Vision monitoring**: analisi continua della telecamera in background
+- Broadcast eventi via WebSocket al frontend
+- On-demand: "Cosa vedi?" via comando vocale
+
+### Media player
+- Spotify Web API (Client Credentials) per controllo riproduzione
+- Fallback a tasti multimedia Windows se Spotify non configurato
+- Supporto comandi vocali: riproduci, pausa, successivo, volume
+
 ### Sistema vocale completo
 - Wake word "Jarvis" via Porcupine (offline, nessuna API key)
-- STT: faster-whisper (modello base, CPU, int8)
-- TTS: kokoro → XTTS (clone vocale) → edge-tts fallback
+- STT: faster-whisper (modello small, GPU CUDA float16, fallback CPU int8)
+- TTS a 3 livelli: kokoro-onnx (primario, veloce) → XTTS v2 (voice cloning su GPU) → edge-tts (fallback cloud)
+- **Streaming TTS progressivo**: risposta divisa in frasi, sintetizzata e inviata singolarmente
+- **VAD interrupt**: rilevamento vocale durante TTS, interruzione immediata se l'utente parla
 
 ## API principali
 
@@ -193,7 +228,10 @@ https://github.com/Picovoice/porcupine/tree/master/resources/keyword_files/windo
 | `GET /api/chats` | Elenco sessioni chat |
 | `POST /api/chats` | Nuova sessione chat |
 | `GET /api/chats/{id}/messages` | Messaggi di una sessione |
-| `WS /api/ws/audio` | Streaming audio → risposta vocale |
+| `WS /api/ws/audio` | Streaming audio → risposta vocale (con streaming TTS progressivo) |
+| `WS /api/ws` | WebSocket principale (vision monitoring, eventi in tempo reale) |
+| `POST /api/auth/register` | Registrazione utente |
+| `POST /api/auth/login` | Login, restituisce JWT |
 | `POST /api/git/command` | Comando Git |
 | `POST /api/terminal/run` | Comando shell sicuro |
 | `POST /api/focus/start` | Avvia Pomodoro |
@@ -234,9 +272,11 @@ Segui le istruzioni in [ARCHITECTURE.md](ARCHITECTURE.md) per la configurazione.
 ## Note tecniche
 
 - **LLM**: Ollama + qwen3:8b (o qualunque modello supportato), keep_alive=-1
-- **Memoria**: Redis (breve termine, 1h) + ChromaDB (lungo termine, RAG)
+- **Memoria**: Redis (breve termine, 1h) + ChromaDB (lungo termine, RAG, 3 collezioni: jarvis_memories, jarvis_knowledge, jarvis_preferences)
 - **Chat**: SQLite (sessioni multiple, auto-titolo, persistente su volume Docker)
 - **Reflection**: auto-valutazione qualità (disabilitata su CPU)
 - **Frontend**: React + Three.js (Arc Reactor 3D), metriche real-time, waveform audio, Inter/JetBrains Mono font
-- **GPU**: `num_gpu: -1` in settings.yaml → auto-detect
+- **GPU**: `num_gpu: -1` in settings.yaml → auto-detect. STT: CUDA float16 (modello small). XTTS: singleton in GPU, warmup all'avvio. Vision: YOLOv8 su GPU
+- **Docker**: 4 container (backend :8765, frontend nginx :80, redis con password, backup). GPU commentata in compose, sbloccare con Dockerfile.cuda
+- **Auth**: JWT con secret da .env, prima registrazione via frontend o API `/api/auth/register`
 - **Niente cloud**: tutto gira in locale

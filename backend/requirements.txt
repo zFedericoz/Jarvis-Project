@@ -26,8 +26,8 @@ edge-tts>=6.1.9
 # Installazione: pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu124
 # torch>=2.0.0  # scommentare per CPU-only
 
-# TTS voice cloning (XTTS v2)
-TTS>=0.22.0
+# TTS voice cloning (XTTS v2) — installazione manuale (richiede GPU, numpy<2):
+# pip install TTS>=0.22.0
 
 # Memory
 redis>=5.0.0
@@ -61,7 +61,7 @@ spotipy>=2.24.0
 pvporcupine==1.9.5
 
 # Utilities
-numpy>=1.26.0
+numpy
 python-multipart>=0.0.9
 psutil>=5.9.0
 
