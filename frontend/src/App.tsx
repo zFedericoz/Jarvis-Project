@@ -353,7 +353,7 @@ export default function JarvisDashboard() {
     let sessionIdReturned: number | null = null;
 
     const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), 120000);
+    const timeout = setTimeout(() => controller.abort(), 600000);
     abortRef.current = controller;
     try {
       const r = await fetchWithAuth(`/api/chat`, {
