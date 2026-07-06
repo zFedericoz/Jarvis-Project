@@ -8,6 +8,7 @@ Aggiunte rispetto alla versione base:
 """
 
 import json
+from datetime import datetime
 import yaml
 import ollama
 import logging
@@ -35,6 +36,12 @@ class LLMClient:
             with open("config/persona.yaml") as f:
                 persona = yaml.safe_load(f)
             self.system_prompt = persona["system_prompt"]
+
+        now = datetime.now()
+        months_it = ["", "gennaio","febbraio","marzo","aprile","maggio","giugno","luglio","agosto","settembre","ottobre","novembre","dicembre"]
+        days_it = ["lunedì","martedì","mercoledì","giovedì","venerdì","sabato","domenica"]
+        date_str = f"{days_it[now.weekday()]} {now.day} {months_it[now.month]} {now.year}"
+        self.system_prompt += f"\n\n# ── DATA CORRENTE ──\nOggi è {date_str}. Usa questa data per tutti i riferimenti temporali.\n"
 
         host = llm_cfg["host"]
         self.client = ollama.Client(host=host)
