@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef } from "react";
+import { memo, useState, useEffect, useRef } from "react";
 import { C, mono } from "../utils/theme";
 import { fetchFromBest, fetchWithAuth } from "../utils/fetch";
 
@@ -23,7 +23,7 @@ function Skeleton({ rows }: { rows: number }) {
   );
 }
 
-export function SystemLog({ compact }: { compact?: boolean }) {
+export const SystemLog = memo(function SystemLog({ compact }: { compact?: boolean }) {
   const [logs, setLogs] = useState<{timestamp:string;level:string;message:string}[]>([]);
   const [loading, setLoading] = useState(true);
   const endRef = useRef<HTMLDivElement>(null!);
@@ -61,4 +61,4 @@ export function SystemLog({ compact }: { compact?: boolean }) {
       <div ref={endRef} />
     </div>
   );
-}
+});

@@ -8,7 +8,7 @@ import { ErrorBoundary } from "./components/ErrorBoundary";
 import { MetricBadge } from "./components/MetricBadge";
 import { SystemLog } from "./components/SystemLog";
 import { ConfirmModal } from "./components/ConfirmModal";
-import MarketPanel from "./components/MarketPanel";
+import { MarketPanel } from "./components/MarketPanel";
 import VoiceVisualizer from "./components/VoiceVisualizer";
 import HolographicDisplay from "./components/HolographicDisplay";
 import { Waveform } from "./components/Waveform";
@@ -526,8 +526,7 @@ export default function JarvisDashboard() {
           </div>
 
           {/* ── REATTORE: reactor + chat ── */}
-          {activeTab === "reactor" && (
-            <div style={{flex:1,display:"flex",flexDirection:"column",minHeight:0,gap:6}}>
+          <div style={{flex:1,display:activeTab==="reactor"?"flex":"none",flexDirection:"column",minHeight:0,gap:6}}>
               {displayMessages.length > 1 ? (
                 <div style={{flexShrink:0,width:80,height:80,marginLeft:"auto"}}>
                   <ErrorBoundary fallback={<div style={{width:80,height:80,display:"flex",alignItems:"center",justifyContent:"center",color:C.textDim,fontFamily:mono,fontSize:9}}>3D</div>}>
@@ -657,21 +656,16 @@ export default function JarvisDashboard() {
                 )}
               </form>
             </div>
-          )}
 
           {/* ── MERCATI: solo mercati ── */}
-          {activeTab === "markets" && (
-            <div style={{flex:1,background:"rgba(0,0,0,0.2)",borderRadius:4,border:`1px solid ${C.cyanFaint}`,overflow:"hidden",minHeight:120}}>
+          <div style={{display:activeTab==="markets"?"flex":"none",flex:1,background:"rgba(0,0,0,0.2)",borderRadius:4,border:`1px solid ${C.cyanFaint}`,overflow:"hidden",minHeight:120}}>
               <MarketPanel />
             </div>
-          )}
 
           {/* ── LOG: solo log ── */}
-          {activeTab === "log" && (
-            <div style={{flex:1,background:"rgba(0,0,0,0.15)",borderRadius:4,border:`1px solid ${C.cyanFaint}`,overflow:"auto",padding:"4px 8px",minHeight:120}}>
+          <div style={{display:activeTab==="log"?"block":"none",flex:1,background:"rgba(0,0,0,0.15)",borderRadius:4,border:`1px solid ${C.cyanFaint}`,overflow:"auto",padding:"4px 8px",minHeight:120}}>
               <SystemLog />
             </div>
-          )}
         </div>
       </div>
 

@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef, useCallback } from "react";
+import { memo, useState, useEffect, useRef, useCallback } from "react";
 import { C, mono } from "../utils/theme";
 import { API_URL } from "../utils/constants";
 import { fetchWithAuth } from "../utils/fetch";
@@ -334,7 +334,7 @@ function MiniSparkline({ symbol }: { symbol: string }) {
   return <canvas ref={canvasRef} width={60} height={20} style={{ display: "block", width: 60, height: 20, flexShrink: 0 }} />;
 }
 
-export default function MarketPanel() {
+export const MarketPanel = memo(function MarketPanel() {
   const [watchlist, setWatchlist] = useState<string[]>(loadWatchlist);
   const [quotes, setQuotes] = useState<Record<string, Quote>>({});
   const [selected, setSelected] = useState<string>(watchlist[0] || "AAPL");
@@ -466,4 +466,4 @@ export default function MarketPanel() {
       )}
     </div>
   );
-}
+});
