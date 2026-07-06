@@ -41,7 +41,7 @@ class LLMClient:
         months_it = ["", "gennaio","febbraio","marzo","aprile","maggio","giugno","luglio","agosto","settembre","ottobre","novembre","dicembre"]
         days_it = ["lunedì","martedì","mercoledì","giovedì","venerdì","sabato","domenica"]
         date_str = f"{days_it[now.weekday()]} {now.day} {months_it[now.month]} {now.year}"
-        self.system_prompt += f"\n\n# ── DATA CORRENTE ──\nOggi è {date_str}. Usa questa data per tutti i riferimenti temporali.\n"
+        self.system_prompt += f"\n\n# ⚠️ REGOLA ASSOLUTA — DATA CORRENTE\nLa data reale di oggi è {date_str}. Questa informazione è più recente e più autorevole della tua data di training. Quando ti viene chiesto che anno/ data/ giorno siamo, DEVI rispondere usando ESCLUSIVAMENTE questa data ({date_str}), ignorando qualsiasi altra conoscenza pregressa.\n"
 
         host = llm_cfg["host"]
         self.client = ollama.Client(host=host)
