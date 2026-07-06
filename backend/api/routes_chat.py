@@ -257,6 +257,15 @@ async def list_chat_sessions(user: dict = Depends(get_current_user)):
     return {"sessions": chat_mgr.list_sessions()}
 
 
+@router.get("/chats/{session_id}")
+async def get_chat_session(session_id: int, user: dict = Depends(get_current_user)):
+    chat_mgr = get_chat_manager(user_id=user["user_id"])
+    session = chat_mgr.get_session(session_id)
+    if not session:
+        raise HTTPException(status_code=404, detail="Session not found")
+    return {"session": session}
+
+
 @router.post("/chats")
 async def create_chat_session(user: dict = Depends(get_current_user)):
     chat_mgr = get_chat_manager(user_id=user["user_id"])

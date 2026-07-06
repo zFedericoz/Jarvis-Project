@@ -174,7 +174,7 @@ export default function JarvisDashboard() {
 
   const { activeSessionId, chatHistory, setChatHistory, addChatHistory } = useStore();
 
-  // Validate session existence
+  // Validate session existence (silent cleanup)
   useEffect(() => {
     if (activeSessionId) {
       fetchWithAuth(`/api/chats/${activeSessionId}`).then(r => {
@@ -182,9 +182,6 @@ export default function JarvisDashboard() {
       }).catch(() => {
         setChatHistory([]);
         localStorage.removeItem('activeSessionId');
-        if (!messages.find(m => m.text.includes("Sessione scaduta"))) {
-          setMessages(p => [...p, {id:msgIdRef.current++,role:"system",text:"⚠️ Sessione scaduta o non valida. Nuova sessione avviata."}]);
-        }
       });
     }
   }, [activeSessionId, setChatHistory]);
