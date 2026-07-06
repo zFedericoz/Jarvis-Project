@@ -40,8 +40,8 @@ class LLMClient:
         now = datetime.now()
         months_it = ["", "gennaio","febbraio","marzo","aprile","maggio","giugno","luglio","agosto","settembre","ottobre","novembre","dicembre"]
         days_it = ["lunedì","martedì","mercoledì","giovedì","venerdì","sabato","domenica"]
-        date_str = f"{days_it[now.weekday()]} {now.day} {months_it[now.month]} {now.year}"
-        self.system_prompt += f"\n\n# ⚠️ REGOLA ASSOLUTA — DATA CORRENTE\nLa data reale di oggi è {date_str}. Questa informazione è più recente e più autorevole della tua data di training. Quando ti viene chiesto che anno/ data/ giorno siamo, DEVI rispondere usando ESCLUSIVAMENTE questa data ({date_str}), ignorando qualsiasi altra conoscenza pregressa.\n"
+        self._date_str = f"{days_it[now.weekday()]} {now.day} {months_it[now.month]} {now.year}"
+        self.system_prompt += f"\n\n# ⚠️ REGOLA ASSOLUTA — DATA CORRENTE\nLa data reale di oggi è {self._date_str}. Questa informazione è più recente e più autorevole della tua data di training. Quando ti viene chiesto che anno/ data/ giorno siamo, DEVI rispondere usando ESCLUSIVAMENTE questa data ({self._date_str}), ignorando qualsiasi altra conoscenza pregressa.\n"
 
         host = llm_cfg["host"]
         self.client = ollama.Client(host=host)
@@ -120,7 +120,6 @@ class LLMClient:
                         language: str = "it", extra_system_prompt: str = "",
                         system_override: str | None = None) -> list[dict]:
         if system_override:
-            # Usato da GitAction e altri tool con prompt specializzati
             system_content = system_override
         else:
             lang_instruct = (
@@ -134,7 +133,11 @@ class LLMClient:
         messages = [{"role": "system", "content": system_content}]
         if context:
             messages.extend(context)
-        messages.append({"role": "user", "content": message})
+        now = datetime.now()
+        months_it = ["", "gennaio","febbraio","marzo","aprile","maggio","giugno","luglio","agosto","settembre","ottobre","novembre","dicembre"]
+        days_it = ["lunedì","martedì","mercoledì","giovedì","venerdì","sabato","domenica"]
+        today = f"{days_it[now.weekday()]} {now.day} {months_it[now.month]} {now.year}"
+        messages.append({"role": "user", "content": f"[DATA CORRENTE: {today}] {message}"})
         return messages
 
     def _rate_response(self, user_message: str, response: str, language: str) -> int:
