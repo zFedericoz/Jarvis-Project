@@ -302,6 +302,8 @@ class MultiAgent:
 
         all_tool_calls_ever = set()
 
+        fix_year = self.llm._fix_year
+
         for round_idx in range(self._max_react_rounds):
             stream = self.llm.client.chat(
                 model=self.llm.model,
@@ -329,7 +331,7 @@ class MultiAgent:
                             all_tool_calls_ever.add(tc_key)
                             tool_calls_batch.append(call)
 
-            assistant_text = "".join(text_buffer)
+            assistant_text = fix_year("".join(text_buffer))
 
             if tool_calls_batch:
                 tool_calls_dicts = [_toolcall_to_dict(tc) for tc in tool_calls_batch]
@@ -367,4 +369,4 @@ class MultiAgent:
         for chunk in stream:
             c = chunk.get("message", {}).get("content", "")
             if c:
-                yield c
+                yield fix_year(c)
