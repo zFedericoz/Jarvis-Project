@@ -71,8 +71,17 @@ class LLMClient:
             kwargs["tools"] = tools
         resp = self.client.chat(**kwargs)
         content = resp["message"].get("content", "")
+        content = self._fix_year(content)
         tool_calls = resp["message"].get("tool_calls", [])
         return content, tool_calls
+
+    @staticmethod
+    def _fix_year(text: str) -> str:
+        now = datetime.now()
+        wrong = str(now.year - 1)  # e.g. "2025" when current is 2026
+        if wrong in text:
+            text = text.replace(wrong, str(now.year))
+        return text
 
     def chat_stream(self, message: str, context: list[dict] | None = None, language: str = "it",
                     extra_system_prompt: str = "",
@@ -90,7 +99,7 @@ class LLMClient:
             content = msg.get("content", "")
             tc = msg.get("tool_calls", None)
             if content:
-                yield ("token", content)
+                yield ("token", self._fix_year(content))
             if tc:
                 yield ("tool_calls", tc)
 
@@ -133,11 +142,7 @@ class LLMClient:
         messages = [{"role": "system", "content": system_content}]
         if context:
             messages.extend(context)
-        now = datetime.now()
-        months_it = ["", "gennaio","febbraio","marzo","aprile","maggio","giugno","luglio","agosto","settembre","ottobre","novembre","dicembre"]
-        days_it = ["lunedì","martedì","mercoledì","giovedì","venerdì","sabato","domenica"]
-        today = f"{days_it[now.weekday()]} {now.day} {months_it[now.month]} {now.year}"
-        messages.append({"role": "user", "content": f"[DATA CORRENTE: {today}] {message}"})
+        messages.append({"role": "user", "content": message})
         return messages
 
     def _rate_response(self, user_message: str, response: str, language: str) -> int:
