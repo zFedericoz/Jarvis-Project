@@ -21,7 +21,9 @@ export function useWebSocket({ onMessage, onAudioData, onStatusChange }: UseWebS
   const connect = useCallback(() => {
     if (ws.current?.readyState === WebSocket.OPEN) return
 
-    const socket = new WebSocket(WS_URL)
+    const token = localStorage.getItem("jwt_token")
+    const wsUrl = token ? `${WS_URL}?token=${token}` : WS_URL
+    const socket = new WebSocket(wsUrl)
 
     socket.binaryType = 'blob'
 

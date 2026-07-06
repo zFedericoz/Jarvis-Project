@@ -22,7 +22,6 @@ _brain         = None
 _speech        = None
 _actions       = None
 _memory        = None
-_chat_manager  = None
 
 
 def get_config():
@@ -107,8 +106,5 @@ def get_memory(config):
 
 
 def get_chat_manager(user_id: str = "default_user"):
-    global _chat_manager
-    # For now, use a single instance per user_id (not globally cached)
-    # In future with proper auth, create per-user instance or use request context
     from chat.chat_manager import ChatManager
-    return ChatManager(user_id=user_id)
+    return ChatManager(user_id=str(user_id))

@@ -7,17 +7,16 @@ import { Scanlines } from "./components/Scanlines";
 import { ErrorBoundary } from "./components/ErrorBoundary";
 import { MetricBadge } from "./components/MetricBadge";
 import { SystemLog } from "./components/SystemLog";
-import { Waveform } from "./components/Waveform";
 import { ConfirmModal } from "./components/ConfirmModal";
 import MarketPanel from "./components/MarketPanel";
-import ParticleField from "./components/ParticleField";
 import VoiceVisualizer from "./components/VoiceVisualizer";
 import HolographicDisplay from "./components/HolographicDisplay";
+import { Waveform } from "./components/Waveform";
 import { useStore } from "./hooks/useStore";
 import { useWebSocket } from "./hooks/useWebSocket";
 import { useWakeWord } from "./hooks/useWakeWord";
 import { useAudioStream } from "./hooks/useAudioStream";
-import { fetchFromBest } from "./utils/fetch";
+import { fetchFromBest, fetchWithAuth } from "./utils/fetch";
 import { THEMES, C, setTheme as applyTheme, font, mono } from "./utils/theme";
 import VectorViz from "./components/VectorViz";
 import TypewriterText from "./components/TypewriterText";
@@ -49,8 +48,14 @@ export default function JarvisDashboard() {
   const [pendingActionLabel, setPendingActionLabel] = useState<string>("");
   const [confirming, setConfirming] = useState(false);
   const [ctxMenu, setCtxMenu] = useState<{x:number;y:number;msg:{id:number;role:string;text:string}}|null>(null);
-  const [authToken, setAuthToken] = useState<string|null>(() => localStorage.getItem("jwt_token"));
-  const [authUser, setAuthUser] = useState<string|null>(() => localStorage.getItem("jwt_user"));
+  const [authToken, setAuthToken] = useState<string|null>(() => {
+    const t = localStorage.getItem("jwt_token");
+    return t && t !== "null" && t !== "undefined" ? t : null;
+  });
+  const [authUser, setAuthUser] = useState<string|null>(() => {
+    const u = localStorage.getItem("jwt_user");
+    return u && u !== "null" && u !== "undefined" ? u : null;
+  });
   const [authMode, setAuthMode] = useState<"login"|"register">("login");
   const [authForm, setAuthForm] = useState({username:"",password:""});
   const [authError, setAuthError] = useState("");
@@ -58,13 +63,40 @@ export default function JarvisDashboard() {
   const [timeStr, setTimeStr] = useState(new Date().toLocaleTimeString('it-IT'));
   const [ragThreshold, setRagThreshold] = useState(1.2);
   useEffect(() => {
-    fetch("/api/rag/threshold").then(r => r.ok && r.json()).then(d => { if (d?.threshold != null) setRagThreshold(d.threshold); }).catch(() => {});
+    fetchWithAuth("/api/rag/threshold").then(r => r.ok && r.json()).then(d => { if (d?.threshold != null) setRagThreshold(d.threshold); }).catch(() => {});
   }, []);
   const updateRagThreshold = async (val: number) => {
     setRagThreshold(val);
-    try { await fetch("/api/rag/threshold", {method:"PUT", headers:{"Content-Type":"application/json"}, body:JSON.stringify({threshold:val})}); } catch {}
+    try { await fetchWithAuth("/api/rag/threshold", {method:"PUT", body:JSON.stringify({threshold:val})}); } catch {}
   };
   useEffect(() => { applyTheme(theme); }, [theme]);
+
+  useEffect(() => {
+    const handler = () => {
+      setAuthToken(null);
+      setAuthUser(null);
+    };
+    window.addEventListener("auth:expired", handler);
+    return () => window.removeEventListener("auth:expired", handler);
+  }, []);
+
+  useEffect(() => {
+    const t = localStorage.getItem("jwt_token");
+    const u = localStorage.getItem("jwt_user");
+    console.log("[AUTH] token:", t ? t.substring(0,20)+"..." : null, "user:", u);
+  }, []);
+  useEffect(() => {
+    const handler = (e: MouseEvent) => {
+      const el = e.target as HTMLElement;
+      if (el.closest("[data-debug-reset]")) {
+        localStorage.removeItem("jwt_token");
+        localStorage.removeItem("jwt_user");
+        window.location.reload();
+      }
+    };
+    document.addEventListener("click", handler, true);
+    return () => document.removeEventListener("click", handler, true);
+  }, []);
   useEffect(() => { const id = setInterval(() => setTimeStr(new Date().toLocaleTimeString('it-IT')), 1000); return () => clearInterval(id); }, []);
   const msgIdRef = useRef(1);
   const chatEndRef = useRef<HTMLDivElement>(null!);
@@ -145,7 +177,7 @@ export default function JarvisDashboard() {
   // Validate session existence
   useEffect(() => {
     if (activeSessionId) {
-      fetch(`/api/chats/${activeSessionId}`).then(r => {
+      fetchWithAuth(`/api/chats/${activeSessionId}`).then(r => {
         if (!r.ok) throw new Error(`HTTP ${r.status}`);
       }).catch(() => {
         setChatHistory([]);
@@ -160,8 +192,8 @@ export default function JarvisDashboard() {
   const sendFeedback = async (msgId:number, rating:number, userMsg:string, assistantMsg:string) => {
     if (feedbackSent[msgId]) return;
     try {
-      await fetch(`/api/feedback`, {
-        method:"POST", headers:{"Content-Type":"application/json"},
+      await fetchWithAuth(`/api/feedback`, {
+        method:"POST",
         body:JSON.stringify({message_id:String(msgId),user_message:userMsg,assistant_response:assistantMsg,rating,language:"it",intent:"chat"}),
       });
       setFeedbackSent(p => ({...p, [msgId]:rating}));
@@ -178,7 +210,7 @@ export default function JarvisDashboard() {
       URL.revokeObjectURL(url);
     } else {
       try {
-        const r = await fetch(`/api/export/pdf`, {method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify({messages:msgs,format:"pdf"})});
+        const r = await fetchWithAuth(`/api/export/pdf`, {method:"POST", body:JSON.stringify({messages:msgs,format:"pdf"})});
         if (!r.ok) throw new Error(`HTTP ${r.status}`);
         const blob = await r.blob();
         const url = URL.createObjectURL(blob);
@@ -189,7 +221,10 @@ export default function JarvisDashboard() {
   };
 
   const fetchMetrics = useCallback(async () => {
-    const d = await fetchFromBest([`${HOST_METRICS_URL}/api/system/metrics`, `/api/system/metrics`]);
+    let d = await fetchFromBest([`${HOST_METRICS_URL}/api/system/metrics`], 2000);
+    if (!d) {
+      try { const r = await fetchWithAuth(`/api/system/metrics`); if (r.ok) d = await r.json(); } catch {}
+    }
     if (d) setMetrics(d as MetricSnapshot);
   }, []);
 
@@ -200,7 +235,7 @@ export default function JarvisDashboard() {
     const fd = new FormData();
     fd.append("file", file);
     try {
-      const r = await fetch(`/api/upload`, {method:"POST", body:fd});
+      const r = await fetchWithAuth(`/api/upload`, {method:"POST", body:fd});
       if (!r.ok) throw new Error(`HTTP ${r.status}`);
       const d = await r.json();
       setAttachedFiles(p => [...p, {name:d.filename, content:d.content}]);
@@ -236,8 +271,8 @@ export default function JarvisDashboard() {
     if (!pendingActionId) return;
     setConfirming(true);
     try {
-      const r = await fetch(`/api/confirm`, {
-        method:"POST", headers:{"Content-Type":"application/json"},
+      const r = await fetchWithAuth(`/api/confirm`, {
+        method:"POST",
         body:JSON.stringify({action_id: pendingActionId, confirm}),
       });
       const d = await r.json();
@@ -321,8 +356,8 @@ export default function JarvisDashboard() {
     const timeout = setTimeout(() => controller.abort(), 120000);
     abortRef.current = controller;
     try {
-      const r = await fetch(`/api/chat`, {
-        method:"POST", headers:{"Content-Type":"application/json"},
+      const r = await fetchWithAuth(`/api/chat`, {
+        method:"POST",
         body:JSON.stringify({text:userMsg, file_content: fileContent, session_id: activeSessionId ?? undefined, stream: true}),
         signal: controller.signal,
       });
@@ -367,7 +402,7 @@ export default function JarvisDashboard() {
 
       if (sessionIdReturned && !activeSessionId) {
         useStore.getState().setActiveSessionId(sessionIdReturned);
-        const sr = await fetch(`${API_URL}/chats`);
+        const sr = await fetchWithAuth(`${API_URL}/chats`);
         const sj = await sr.json();
         if (sj.sessions) { useStore.getState().setSessions(sj.sessions); }
       }
@@ -411,12 +446,7 @@ export default function JarvisDashboard() {
     <div style={{background:C.bg,height:"100vh",width:"100vw",overflow:"hidden",fontFamily:font,color:C.text,position:"relative",display:"flex",flexDirection:"column",boxSizing:"border-box"}}>
       <Scanlines theme={theme} />
 
-      {/* ── Particelle 3D di sfondo ── */}
-      <div style={{position:"fixed",inset:0,zIndex:0,pointerEvents:"none",opacity:0.4}}>
-        <Canvas camera={{position:[0,0,12],fov:60}}>
-          <ParticleField />
-        </Canvas>
-      </div>
+
 
       {/* ── Ologramma compatto nella toolbar ── */}
       {voiceEnabled && (
@@ -480,6 +510,7 @@ export default function JarvisDashboard() {
           </label>
           {authUser && <span style={{fontSize:11,color:C.green,fontFamily:mono}}>{authUser}</span>}
           {authUser && <span onClick={handleLogout} style={{cursor:"pointer",fontSize:13,color:C.textFaint}} title="Logout">🚪</span>}
+          <span data-debug-reset="1" onClick={()=>{localStorage.removeItem("jwt_token");localStorage.removeItem("jwt_user");setAuthToken(null);setAuthUser(null);}} style={{cursor:"pointer",fontSize:11,color:C.amber,border:`1px solid ${C.amber}30`,padding:"2px 6px",borderRadius:3,fontFamily:mono,position:"relative",zIndex:9999}} title="Reset autenticazione forzato">🔓 Reset</span>
           {timeStr}
         </div>
       </div>
@@ -649,9 +680,10 @@ export default function JarvisDashboard() {
 
       {/* ── Auth Modal ── */}
       {!authToken && (
-        <div style={{position:"fixed",inset:0,zIndex:9998,background:"rgba(7,21,32,0.95)",display:"flex",alignItems:"center",justifyContent:"center"}}>
-          <form onSubmit={handleAuth} style={{background:"#0a1e30",border:"1px solid rgba(0,229,255,0.25)",borderRadius:8,padding:"30px 40px",width:340,boxShadow:"0 0 40px rgba(0,229,255,0.1)"}}>
-            <div style={{textAlign:"center",marginBottom:20,fontFamily:mono,fontSize:18,letterSpacing:"0.3em",color:C.cyan,fontWeight:"bold"}}>J.A.R.V.I.S.</div>
+        <div style={{position:"fixed",inset:0,zIndex:9998,background:"#0a1e30",display:"flex",alignItems:"center",justifyContent:"center"}}>
+          <form onSubmit={handleAuth} style={{background:"#0f2a40",border:"1px solid rgba(0,229,255,0.35)",borderRadius:8,padding:"30px 40px",width:360,boxShadow:"0 0 60px rgba(0,229,255,0.15)"}}>
+            <div style={{textAlign:"center",marginBottom:6,fontFamily:mono,fontSize:12,letterSpacing:"0.2em",color:C.textFaint}}>AUTENTICAZIONE RICHIESTA</div>
+            <div style={{textAlign:"center",marginBottom:20,fontFamily:mono,fontSize:22,letterSpacing:"0.3em",color:C.cyan,fontWeight:"bold"}}>J.A.R.V.I.S.</div>
             <div style={{display:"flex",gap:0,marginBottom:16}}>
               <button type="button" onClick={()=>setAuthMode("login")} style={{flex:1,padding:"6px 0",background:authMode==="login"?C.cyanFaint:"transparent",border:`1px solid ${authMode==="login"?C.cyan:"transparent"}`,color:authMode==="login"?C.cyan:C.textDim,borderRadius:"4px 0 0 4px",cursor:"pointer",fontSize:13}}>Accedi</button>
               <button type="button" onClick={()=>setAuthMode("register")} style={{flex:1,padding:"6px 0",background:authMode==="register"?C.cyanFaint:"transparent",border:`1px solid ${authMode==="register"?C.cyan:"transparent"}`,color:authMode==="register"?C.cyan:C.textDim,borderRadius:"0 4px 4px 0",cursor:"pointer",fontSize:13}}>Registrati</button>
@@ -661,8 +693,8 @@ export default function JarvisDashboard() {
             <input type="password" placeholder="Password" value={authForm.password} onChange={e=>setAuthForm(p=>({...p,password:e.target.value}))}
               style={{width:"100%",padding:"8px 10px",marginBottom:12,background:"rgba(0,0,0,0.3)",border:"1px solid rgba(0,229,255,0.2)",borderRadius:4,color:C.text,fontSize:14,outline:"none"}} />
             {authError && <div style={{color:C.red,fontSize:12,marginBottom:8,fontFamily:mono}}>⚠ {authError}</div>}
-            <button type="submit" style={{width:"100%",padding:"8px 0",background:C.cyanFaint,border:"1px solid rgba(0,229,255,0.3)",borderRadius:4,color:C.cyan,cursor:"pointer",fontSize:14}}>
-              {authMode === "login" ? "Accedi" : "Registrati"}
+            <button type="submit" style={{width:"100%",padding:"9px 0",background:C.cyanFaint,border:`1px solid ${C.cyan}40`,borderRadius:4,color:C.cyan,cursor:"pointer",fontSize:14,fontFamily:mono,fontWeight:"bold",letterSpacing:"0.1em"}}>
+              {authMode === "login" ? "► ACCEDI" : "► REGISTRATI"}
             </button>
           </form>
         </div>

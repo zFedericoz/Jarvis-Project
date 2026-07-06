@@ -33,7 +33,9 @@ export function useWakeWord({ onWake, enabled }: UseWakeWordProps) {
       source.current = audioCtx.current.createMediaStreamSource(stream.current)
       processor.current = audioCtx.current.createScriptProcessor(512, 1, 1)
 
-      ws.current = new WebSocket(WAKE_WS_URL)
+      const token = localStorage.getItem("jwt_token")
+      const wsUrl = token ? `${WAKE_WS_URL}?token=${token}` : WAKE_WS_URL
+      ws.current = new WebSocket(wsUrl)
 
       ws.current.onopen = () => {
         source.current!.connect(processor.current!)

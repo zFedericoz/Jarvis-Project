@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { C, mono } from "../utils/theme";
+import { fetchWithAuth } from "../utils/fetch";
 
 interface VecPoint {
   id: string; text: string; metadata: Record<string,unknown>; embedding: number[]|null;
@@ -14,7 +15,7 @@ export default function VectorViz({ onClose }: { onClose:()=>void }) {
   const [selectedCol, setSelectedCol] = useState("memories");
 
   useEffect(() => {
-    fetch("/api/vectors").then(r=>r.json()).then(d=>{
+    fetchWithAuth("/api/vectors").then(r=>r.json()).then(d=>{
       if (d.collections) setData(d.collections);
       else setError(d.detail || "Errore caricamento");
     }).catch(e=>setError(String(e))).finally(()=>setLoading(false));

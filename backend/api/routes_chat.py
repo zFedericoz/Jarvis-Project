@@ -4,7 +4,9 @@ import logging
 import uuid
 from datetime import datetime, timezone
 
-from fastapi import APIRouter, HTTPException, Request
+from fastapi import APIRouter, Depends, HTTPException, Request
+
+from .auth import get_current_user
 from fastapi.responses import StreamingResponse
 
 import skills
@@ -23,7 +25,7 @@ router = APIRouter()
 
 
 @router.post("/chat")
-async def chat_text(payload: ChatRequest, request: Request = None):
+async def chat_text(payload: ChatRequest, request: Request = None, user: dict = Depends(get_current_user)):
     # ── Rate limiting
     client_ip = request.client.host if request else "unknown"
     if not await _check_rate_limit(client_ip):
@@ -53,7 +55,7 @@ async def chat_text(payload: ChatRequest, request: Request = None):
         text = f"{text}\n\n[File content]:\n{file_content}" if text else f"[File content]:\n{file_content}"
 
     # ── Chat session handling ────────────────────────────────────────────────
-    chat_mgr = get_chat_manager()
+    chat_mgr = get_chat_manager(user_id=user["user_id"])
     if session_id is not None:
         existing = chat_mgr.get_session(session_id)
         if not existing:
@@ -124,7 +126,7 @@ async def chat_text(payload: ChatRequest, request: Request = None):
                 return r
 
             try:
-                response = await actions[intent].execute(original_query)
+                response = await actions[intent].execute(original_query, session_key=str(session_id))
             except Exception as e:
                 logger.error(f"Intent execution error ({intent}): {e}")
                 response = "[Errore durante l'esecuzione del comando]"
@@ -205,7 +207,7 @@ async def chat_text(payload: ChatRequest, request: Request = None):
 
 
 @router.post("/confirm")
-async def confirm_action(payload: ConfirmRequest):
+async def confirm_action(payload: ConfirmRequest, user: dict = Depends(get_current_user)):
     _cleanup_expired_actions()  # Clean up before checking
 
     action = _pending_actions.get(payload.action_id)
@@ -217,7 +219,7 @@ async def confirm_action(payload: ConfirmRequest):
         actions = get_actions(config)
         intent = action["intent"]
         if intent in actions:
-            result = await actions[intent].execute(action["command"])
+            result = await actions[intent].execute(action["command"], session_key=str(user["user_id"]))
             del _pending_actions[payload.action_id]
             logger.info(f"Action confirmed: {payload.action_id}")
             return {"status": "ok", "result": result, "action": payload.action_id}
@@ -229,7 +231,7 @@ async def confirm_action(payload: ConfirmRequest):
 
 
 @router.post("/feedback")
-async def submit_feedback(fb: FeedbackRequest):
+async def submit_feedback(fb: FeedbackRequest, user: dict = Depends(get_current_user)):
     entry = {
         "timestamp": datetime.now(timezone.utc).isoformat(),
         "message_id": fb.message_id,
@@ -250,41 +252,41 @@ async def submit_feedback(fb: FeedbackRequest):
 
 
 @router.get("/chats")
-async def list_chat_sessions():
-    chat_mgr = get_chat_manager()
+async def list_chat_sessions(user: dict = Depends(get_current_user)):
+    chat_mgr = get_chat_manager(user_id=user["user_id"])
     return {"sessions": chat_mgr.list_sessions()}
 
 
 @router.post("/chats")
-async def create_chat_session():
-    chat_mgr = get_chat_manager()
+async def create_chat_session(user: dict = Depends(get_current_user)):
+    chat_mgr = get_chat_manager(user_id=user["user_id"])
     session = chat_mgr.create_session()
     return {"session": session}
 
 
 @router.delete("/chats/{session_id}")
-async def delete_chat_session(session_id: int):
-    chat_mgr = get_chat_manager()
+async def delete_chat_session(session_id: int, user: dict = Depends(get_current_user)):
+    chat_mgr = get_chat_manager(user_id=user["user_id"])
     ok = chat_mgr.delete_session(session_id)
     return {"status": "deleted" if ok else "not_found"}
 
 
 @router.patch("/chats/{session_id}")
-async def rename_chat_session(session_id: int, payload: RenameSessionRequest):
-    chat_mgr = get_chat_manager()
+async def rename_chat_session(session_id: int, payload: RenameSessionRequest, user: dict = Depends(get_current_user)):
+    chat_mgr = get_chat_manager(user_id=user["user_id"])
     ok = chat_mgr.rename_session(session_id, payload.title)
     return {"status": "renamed" if ok else "not_found"}
 
 
 @router.get("/chats/{session_id}/messages")
-async def get_chat_messages(session_id: int):
-    chat_mgr = get_chat_manager()
+async def get_chat_messages(session_id: int, user: dict = Depends(get_current_user)):
+    chat_mgr = get_chat_manager(user_id=user["user_id"])
     messages = chat_mgr.get_messages(session_id)
     return {"messages": messages}
 
 
 @router.post("/batch")
-async def run_batch(body: BatchRequest, request: Request = None):
+async def run_batch(body: BatchRequest, request: Request = None, user: dict = Depends(get_current_user)):
     results = []
     for i, step in enumerate(body.steps):
         try:

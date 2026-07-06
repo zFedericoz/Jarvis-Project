@@ -10,8 +10,9 @@ def test_ready(client):
     assert r.json()["status"] in ("ok", "degraded")
 
 
-def test_plugins(client):
-    r = client.get("/api/plugins")
+def test_plugins(client, auth_token):
+    headers = {"Authorization": f"Bearer {auth_token}"}
+    r = client.get("/api/plugins", headers=headers)
     assert r.status_code == 200
     data = r.json()
     assert "plugins" in data
@@ -20,8 +21,9 @@ def test_plugins(client):
     assert "echo" in names
 
 
-def test_plugin_exec(client):
-    r = client.post("/api/plugins/echo/exec", json={"action": "execute", "params": {"message": "test"}})
+def test_plugin_exec(client, auth_token):
+    headers = {"Authorization": f"Bearer {auth_token}"}
+    r = client.post("/api/plugins/echo/exec", json={"action": "execute", "params": {"message": "test"}}, headers=headers)
     assert r.status_code == 200
     data = r.json()
     assert data["plugin"] == "echo"

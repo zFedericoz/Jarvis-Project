@@ -1,6 +1,7 @@
 import { useState, useEffect, useRef, useCallback } from "react";
 import { C, mono } from "../utils/theme";
 import { API_URL } from "../utils/constants";
+import { fetchWithAuth } from "../utils/fetch";
 
 const DOCKER_API = "";
 const STORAGE_KEY = "jarvis_watchlist";
@@ -65,7 +66,7 @@ function PriceChart({ symbol, color }: { symbol: string; color: string }) {
   useEffect(() => {
     setLoading(true);
     const pi = PERIODS.find(p => p.period === period) || PERIODS[3];
-    fetch(`${DOCKER_API}/api/market/history?symbol=${symbol}&period=${period}&interval=${pi.interval}`)
+    fetchWithAuth(`${DOCKER_API}/api/market/history?symbol=${symbol}&period=${period}&interval=${pi.interval}`)
       .then(r => r.json())
       .then(d => { if (Array.isArray(d)) setData(d); })
       .catch(() => {})
@@ -270,7 +271,7 @@ function SymbolSearch({ onAdd }: { onAdd: (sym: string) => void }) {
   useEffect(() => {
     if (query.length < 1) { setResults([]); return; }
     const t = setTimeout(() => {
-      fetch(`${DOCKER_API}/api/market/search?q=${encodeURIComponent(query)}`)
+      fetchWithAuth(`${DOCKER_API}/api/market/search?q=${encodeURIComponent(query)}`)
         .then(r => r.json())
         .then(d => { if (Array.isArray(d)) setResults(d.slice(0, 6)); })
         .catch(() => {});
@@ -305,7 +306,7 @@ function SymbolSearch({ onAdd }: { onAdd: (sym: string) => void }) {
 function MiniSparkline({ symbol }: { symbol: string }) {
   const canvasRef = useRef<HTMLCanvasElement>(null!);
   useEffect(() => {
-    fetch(`${DOCKER_API}/api/market/history?symbol=${symbol}&period=1mo&interval=1d`)
+    fetchWithAuth(`${DOCKER_API}/api/market/history?symbol=${symbol}&period=1mo&interval=1d`)
       .then(r => r.json())
       .then(data => {
         if (!Array.isArray(data) || data.length < 2) return;
@@ -362,7 +363,7 @@ export default function MarketPanel() {
       const results: Record<string, Quote> = {};
       await Promise.all(watchlist.map(async sym => {
         try {
-          const r = await fetch(`${DOCKER_API}/api/market/quote?symbol=${encodeURIComponent(sym)}`);
+          const r = await fetchWithAuth(`${DOCKER_API}/api/market/quote?symbol=${encodeURIComponent(sym)}`);
           if (r.ok) {
             const d = await r.json();
             if (d.symbol) results[sym] = d;
@@ -378,7 +379,7 @@ export default function MarketPanel() {
 
   useEffect(() => {
     if (!selected) return;
-    fetch(`${DOCKER_API}/api/market/news?symbol=${encodeURIComponent(selected)}`)
+    fetchWithAuth(`${DOCKER_API}/api/market/news?symbol=${encodeURIComponent(selected)}`)
       .then(r => r.json())
       .then(d => { if (Array.isArray(d)) setNews(d.slice(0, 5)); })
       .catch(() => {});

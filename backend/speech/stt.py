@@ -45,11 +45,19 @@ class SpeechToText:
             self.default_language = None  # faster-whisper usa None per auto-detect
 
         logger.info(f"Caricamento Whisper: {model_size} ({device}, {compute_type})")
-        self.model = WhisperModel(
-            model_size,
-            device=device,
-            compute_type=compute_type,
-        )
+        try:
+            self.model = WhisperModel(
+                model_size,
+                device=device,
+                compute_type=compute_type,
+            )
+        except Exception:
+            logger.warning(f"Whisper con {device}/{compute_type} fallito, fallback a cpu/int8")
+            self.model = WhisperModel(
+                model_size,
+                device="cpu",
+                compute_type="int8",
+            )
         logger.info("Whisper pronto")
 
     def transcribe(self, audio_data: np.ndarray, language: str | None = None) -> tuple[str, str]:

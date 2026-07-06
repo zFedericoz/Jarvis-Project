@@ -17,7 +17,7 @@ class ChatManager:
         self._db_path = Path(db_path)
         self._db_path.parent.mkdir(parents=True, exist_ok=True)
         self._lock = threading.Lock()
-        self._user_id = user_id or os.getenv("USER", "default_user")
+        self._user_id = str(user_id) if user_id else os.getenv("USER", "default_user")
         self._init_db()
 
     def _conn(self):
@@ -140,6 +140,12 @@ class ChatManager:
 
     def get_messages(self, session_id: int) -> list[dict]:
         with self._lock, self._conn() as conn:
+            session = conn.execute(
+                "SELECT id FROM sessions WHERE id = ? AND user_id = ?",
+                (session_id, self._user_id)
+            ).fetchone()
+            if not session:
+                return []
             rows = conn.execute(
                 "SELECT * FROM messages WHERE session_id = ? ORDER BY id ASC",
                 (session_id,),

@@ -5,9 +5,10 @@ import uuid
 from pathlib import Path
 
 import psutil
-from fastapi import APIRouter, File, HTTPException, UploadFile, WebSocket
+from fastapi import APIRouter, Depends, File, HTTPException, UploadFile, WebSocket, WebSocketException, status as http_status
 from fastapi.responses import Response, StreamingResponse
 
+from .auth import get_current_user, decode_token
 from .constants import MAX_UPLOAD_SIZE, BLOCKED_EXTENSIONS, ALLOWED_EXTENSIONS
 from .dependencies import get_config, get_brain, get_speech, get_actions, get_memory, new_context, get_chat_manager
 from .routes_common import (
@@ -76,7 +77,7 @@ async def get_status():
 
 
 @router.get("/system/metrics")
-async def get_system_metrics():
+async def get_system_metrics(user: dict = Depends(get_current_user)):
     metrics = _collect_metrics()
     _metric_history["cpu"].append(metrics["cpu"])
     _metric_history["ram"].append(metrics["ram"])
@@ -95,7 +96,7 @@ async def get_system_metrics():
 
 
 @router.get("/system/logs")
-async def get_system_logs():
+async def get_system_logs(user: dict = Depends(get_current_user)):
     cpu = psutil.cpu_percent(interval=0)
     ram = psutil.virtual_memory()
     if cpu > 85:
@@ -108,7 +109,11 @@ async def get_system_logs():
 
 
 @router.websocket("/ws/wake")
-async def websocket_wake(ws: WebSocket):
+async def websocket_wake(ws: WebSocket, token: str | None = None):
+    token = token or ws.query_params.get("token")
+    if not token or decode_token(token) is None:
+        await ws.close(code=http_status.WS_1008_POLICY_VIOLATION)
+        return
     await manager.connect(ws)
     config = get_config()
     await handle_wake_word(ws, config)
@@ -116,7 +121,11 @@ async def websocket_wake(ws: WebSocket):
 
 
 @router.websocket("/ws/audio")
-async def websocket_audio(ws: WebSocket):
+async def websocket_audio(ws: WebSocket, token: str | None = None):
+    token = token or ws.query_params.get("token")
+    if not token or decode_token(token) is None:
+        await ws.close(code=http_status.WS_1008_POLICY_VIOLATION)
+        return
     await manager.connect(ws)
     config = get_config()
     speech = get_speech(config)
@@ -132,12 +141,12 @@ async def websocket_audio(ws: WebSocket):
 
 
 @router.get("/rag/threshold")
-async def get_rag_threshold():
+async def get_rag_threshold(user: dict = Depends(get_current_user)):
     return {"threshold": rag_distance_threshold}
 
 
 @router.put("/rag/threshold")
-async def set_rag_threshold(body: RagThresholdRequest):
+async def set_rag_threshold(body: RagThresholdRequest, user: dict = Depends(get_current_user)):
     global rag_distance_threshold
     if not 0.1 <= body.threshold <= 3.0:
         raise HTTPException(status_code=400, detail="Threshold must be between 0.1 and 3.0")
@@ -172,7 +181,7 @@ def _build_pdf(messages: list[dict]) -> bytes:
 
 
 @router.post("/export/pdf")
-async def export_pdf(body: ExportRequest):
+async def export_pdf(body: ExportRequest, user: dict = Depends(get_current_user)):
     try:
         pdf_bytes = _build_pdf([{"role": m.role, "text": m.text} for m in body.messages])
         return Response(content=pdf_bytes, media_type="application/pdf",
@@ -202,12 +211,12 @@ def _load_voice_settings():
 
 
 @router.get("/voice/settings")
-async def get_voice_settings():
+async def get_voice_settings(user: dict = Depends(get_current_user)):
     return _load_voice_settings()
 
 
 @router.put("/voice/settings")
-async def update_voice_settings(body: VoiceSettingsRequest):
+async def update_voice_settings(body: VoiceSettingsRequest, user: dict = Depends(get_current_user)):
     import yaml
     cfg_path = Path("config/settings.yaml")
     cfg = {}
@@ -254,13 +263,13 @@ async def login(body: AuthRequest):
 
 
 @router.get("/plugins")
-async def list_plugins():
+async def list_plugins(user: dict = Depends(get_current_user)):
     loader = get_plugin_loader()
     return {"plugins": loader.list_plugins()}
 
 
 @router.post("/plugins/{name}/exec")
-async def exec_plugin(name: str, body: dict):
+async def exec_plugin(name: str, body: dict, user: dict = Depends(get_current_user)):
     loader = get_plugin_loader()
     plugin = loader.get_plugin(name)
     if not plugin:
@@ -272,7 +281,7 @@ async def exec_plugin(name: str, body: dict):
 
 
 @router.get("/vectors")
-async def get_vectors():
+async def get_vectors(user: dict = Depends(get_current_user)):
     """Restituisce tutti i vettori e i testi delle collezioni ChromaDB per visualizzazione."""
     try:
         from memory.persistent import PersistentMemory
@@ -305,7 +314,7 @@ async def get_vectors():
 
 
 @router.post("/upload", response_model=UploadResponse)
-async def upload_file(file: UploadFile = File(...)):
+async def upload_file(file: UploadFile = File(...), user: dict = Depends(get_current_user)):
     content = await file.read()
 
     # ── 1. Size validation

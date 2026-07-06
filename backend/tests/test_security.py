@@ -11,9 +11,10 @@ def test_sql_injection_auth(client):
     assert r.status_code == 401
 
 
-def test_path_traversal_upload(client):
+def test_path_traversal_upload(client, auth_token):
     """Tentativo di path traversal nel filename."""
-    r = client.post("/api/upload", files={"file": ("../../etc/passwd", b"test", "text/plain")})
+    headers = {"Authorization": f"Bearer {auth_token}"}
+    r = client.post("/api/upload", files={"file": ("../../etc/passwd", b"test", "text/plain")}, headers=headers)
     assert r.status_code in (200, 413, 400)
     if r.status_code == 200:
         fname = r.json()["filename"]

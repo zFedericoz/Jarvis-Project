@@ -123,3 +123,52 @@ async def test_deny_precedence_over_confirm():
     # 'non' (deny) controllato prima di 'sì' (confirm) → annullamento
     assert "annullata" in r.lower(), f"Prevale la conferma! Risultato: {r}"
     assert a._pending is None
+
+
+@pytest.mark.asyncio
+async def test_pending_isolation_by_session_key():
+    """Due session_key diverse devono avere stati pending indipendenti."""
+    a = SystemControl({"system": {"host": "127.0.0.1", "port": 8765}})
+
+    # User A chiede shutdown → pending per session_a
+    r_a = await a.execute("shutdown", session_key="session_a")
+    assert "Conferma" in r_a
+    assert "session_a" in a._pending_by_session
+    assert a._pending_by_session["session_a"]["action"] == "shutdown"
+    assert "session_b" not in a._pending_by_session
+
+    # User B (sessione diversa) chiede restart → pending separato
+    r_b = await a.execute("riavvia", session_key="session_b")
+    assert "Conferma" in r_b
+    assert "session_b" in a._pending_by_session
+    assert a._pending_by_session["session_b"]["action"] == "restart"
+    # User A deve ancora essere in pending
+    assert "session_a" in a._pending_by_session
+    assert a._pending_by_session["session_a"]["action"] == "shutdown"
+
+    # User B conferma → solo B viene eseguito, A rimane in pending
+    r_b_confirm = await a.execute("sì", session_key="session_b")
+    assert a._pending_by_session.get("session_b") is None
+    # A ancora in attesa
+    assert a._pending_by_session["session_a"]["action"] == "shutdown"
+
+    # User A conferma → solo A viene eseguito
+    r_a_confirm = await a.execute("conferma", session_key="session_a")
+    assert a._pending_by_session.get("session_a") is None
+    assert a._pending_by_session.get("session_b") is None
+
+
+@pytest.mark.asyncio
+async def test_change_volume_file_not_found(monkeypatch):
+    """_change_volume non deve crashare se subprocess.run solleva FileNotFoundError."""
+    import subprocess as _real_subprocess
+
+    def _mock_run(*args, **kwargs):
+        raise FileNotFoundError("mock: binary not found")
+
+    monkeypatch.setattr(_real_subprocess, "run", _mock_run)
+
+    a = SystemControl({"system": {"host": "127.0.0.1", "port": 8765}})
+    # Deve tornare il messaggio di successo, non crashare
+    result = await a.execute("alza volume")
+    assert "Volume alzato" in result

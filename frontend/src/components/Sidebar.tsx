@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { useStore } from "../hooks/useStore";
 import { API_URL } from "../utils/constants";
+import { fetchWithAuth } from "../utils/fetch";
 
 const C = {
   bg: "#071520",
@@ -27,7 +28,7 @@ export default function Sidebar() {
   const [vsDirty, setVsDirty] = useState(false);
 
   useEffect(() => {
-    fetch(`${API_URL}/voice/settings`).then(r => r.ok && r.json()).then(d => { if (d) setVs(d); }).catch(() => {});
+    fetchWithAuth(`${API_URL}/voice/settings`).then(r => r.ok && r.json()).then(d => { if (d) setVs(d); }).catch(() => {});
   }, []);
 
   const updateVs = (key: string, val: any) => {
@@ -37,13 +38,13 @@ export default function Sidebar() {
 
   const saveVs = async () => {
     try {
-      await fetch(`${API_URL}/voice/settings`, {method:"PUT", headers:{"Content-Type":"application/json"}, body:JSON.stringify(vs)});
+      await fetchWithAuth(`${API_URL}/voice/settings`, {method:"PUT", body:JSON.stringify(vs)});
       setVsDirty(false);
     } catch {}
   };
 
   useEffect(() => {
-    fetch(`${API_URL}/chats`)
+    fetchWithAuth(`${API_URL}/chats`)
       .then((r) => r.json())
       .then((d) => { if (d.sessions) setSessions(d.sessions); })
       .catch(() => {});
@@ -51,7 +52,7 @@ export default function Sidebar() {
 
   const handleNew = async () => {
     try {
-      const r = await fetch(`${API_URL}/chats`, { method: "POST" });
+      const r = await fetchWithAuth(`${API_URL}/chats`, { method: "POST" });
       const d = await r.json();
       if (d.session) {
         addSession(d.session);
@@ -64,7 +65,7 @@ export default function Sidebar() {
   const handleSelect = async (id: number) => {
     setActiveSessionId(id);
     try {
-      const r = await fetch(`${API_URL}/chats/${id}/messages`);
+      const r = await fetchWithAuth(`${API_URL}/chats/${id}/messages`);
       const d = await r.json();
       if (d.messages) setChatHistory(d.messages);
     } catch {}
@@ -73,7 +74,7 @@ export default function Sidebar() {
   const handleDelete = async (e: React.MouseEvent, id: number) => {
     e.stopPropagation();
     try {
-      await fetch(`${API_URL}/chats/${id}`, { method: "DELETE" });
+      await fetchWithAuth(`${API_URL}/chats/${id}`, { method: "DELETE" });
       removeSession(id);
       if (activeSessionId === id) setChatHistory([]);
     } catch {}
@@ -82,7 +83,7 @@ export default function Sidebar() {
   const handleRename = async (id: number) => {
     if (editTitle.trim()) {
       try {
-        await fetch(`${API_URL}/chats/${id}`, { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ title: editTitle.trim() }) });
+        await fetchWithAuth(`${API_URL}/chats/${id}`, { method: "PATCH", body: JSON.stringify({ title: editTitle.trim() }) });
         updateSession(id, { title: editTitle.trim() });
       } catch {}
     }

@@ -32,3 +32,20 @@ def test_login(client):
 def test_login_wrong_password(client):
     r = client.post("/api/auth/login", json={"username": "nonexistent", "password": "wrong"})
     assert r.status_code == 401
+
+
+def test_protected_endpoint_returns_401_without_token(client):
+    r = client.get("/api/plugins")
+    assert r.status_code == 401
+
+
+def test_protected_endpoint_returns_200_with_valid_token(client, auth_token):
+    headers = {"Authorization": f"Bearer {auth_token}"}
+    r = client.get("/api/plugins", headers=headers)
+    assert r.status_code == 200
+
+
+def test_protected_endpoint_returns_401_with_invalid_token(client):
+    headers = {"Authorization": "Bearer invalidtoken123"}
+    r = client.get("/api/plugins", headers=headers)
+    assert r.status_code == 401

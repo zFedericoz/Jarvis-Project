@@ -87,16 +87,23 @@ def authenticate_user(username: str, password: str) -> dict:
         conn.close()
 
 
-async def get_current_user(credentials: HTTPAuthorizationCredentials = Depends(security)):
-    if credentials is None:
-        raise HTTPException(status_code=401, detail="Not authenticated")
-    token = credentials.credentials
+def decode_token(token: str) -> dict | None:
+    """Decodifica un JWT token e restituisce il payload o None se invalido."""
     try:
         payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
         username = payload.get("sub")
         user_id = payload.get("user_id")
         if username is None:
-            raise HTTPException(status_code=401, detail="Invalid token")
+            return None
         return {"username": username, "user_id": user_id}
     except JWTError:
+        return None
+
+
+async def get_current_user(credentials: HTTPAuthorizationCredentials = Depends(security)):
+    if credentials is None:
+        raise HTTPException(status_code=401, detail="Not authenticated")
+    user = decode_token(credentials.credentials)
+    if user is None:
         raise HTTPException(status_code=401, detail="Invalid token")
+    return user

@@ -103,6 +103,12 @@ _BLACKLIST_PATTERNS = [
     r"\bbcdedit\b",
     r"\bdiskpart\b",
 
+    # Python -c (codice inline arbitrario)
+    r"python(?:3)?\s+-c\b",
+
+    # -m non consentito (moduli diversi da pytest)
+    r"python(?:3)?\s+-m\s+(?!pytest\b)\S+",
+
     # Offuscamento / shell injection
     r"eval\s+\$\(",
     r"\$\(.*\)",                          # command substitution in contesti sospetti
@@ -149,8 +155,18 @@ _CATEGORIES: dict[str, dict[str, list | None]] = {
         "wc": None,
     },
     "python": {
-        "python": None,
-        "python3": None,
+        "python": [
+            r"^--version\s*$",
+            r"^-V\s*$",
+            r"^-m\s+pytest\b",
+            r"^[\w][\w.\-/]*\.py\b",
+        ],
+        "python3": [
+            r"^--version\s*$",
+            r"^-V\s*$",
+            r"^-m\s+pytest\b",
+            r"^[\w][\w.\-/]*\.py\b",
+        ],
         "pip": [r"^(install|list|show|freeze|check)\s"],
         "pip3": [r"^(install|list|show|freeze|check)\s"],
     },
@@ -352,12 +368,42 @@ class TerminalAction(BaseAction):
             # Controlla che gli argomenti matchino almeno uno dei pattern consentiti
             for arg_pattern in allowed_args:
                 if re.match(arg_pattern, args):
+                    # Extra validation per file .py (path sicuro + esistenza)
+                    if category == "python" and args.endswith(".py"):
+                        if not self._validate_python_file(args):
+                            logger.info(f"Python file validation: '{args}' negato")
+                            continue
                     return True, category
             # Il binary è in whitelist ma gli argomenti non sono consentiti
             logger.info(f"Whitelist: binary '{binary}' ok ma args '{args}' non consentiti")
             return False, ""
 
         return False, ""
+
+    def _validate_python_file(self, args: str) -> bool:
+        """Verifica che args sia un path .py sicuro: relativo, senza .., file esistente."""
+        file_path = args.strip()
+        # Estrai solo il path (primo token)
+        file_path = file_path.split()[0]
+
+        # Blocca path assoluti (iniziano con /)
+        if file_path.startswith("/"):
+            logger.warning(f"Python file assoluto bloccato: {file_path}")
+            return False
+
+        # Blocca .. in qualsiasi componente del path
+        parts = file_path.replace("\\", "/").split("/")
+        if ".." in parts:
+            logger.warning(f"Python file con '..' bloccato: {file_path}")
+            return False
+
+        # Verifica che il file esista nella working_dir
+        full = (self._working_dir / file_path).resolve()
+        if not full.exists() or not full.is_file():
+            logger.info(f"Python file non trovato: {full}")
+            return False
+
+        return True
 
     def _extract_binary(self, cmd: str) -> str:
         """Estrae il primo token (il binario) da un comando shell."""

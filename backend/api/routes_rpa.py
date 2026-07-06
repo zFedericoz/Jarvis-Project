@@ -1,7 +1,9 @@
 import asyncio
 import logging
 
-from fastapi import APIRouter
+from fastapi import APIRouter, Depends
+
+from .auth import get_current_user
 
 from .dependencies import get_config, get_actions
 from .routes_common import _push_log
@@ -17,7 +19,7 @@ router = APIRouter()
 
 
 @router.post("/rpa/screenshot")
-async def rpa_screenshot():
+async def rpa_screenshot(user: dict = Depends(get_current_user)):
     """
     Cattura uno screenshot del desktop e lo salva in data/screenshots/.
 
@@ -37,7 +39,7 @@ async def rpa_screenshot():
 
 
 @router.post("/rpa/analyze")
-async def rpa_analyze():
+async def rpa_analyze(user: dict = Depends(get_current_user)):
     """
     Cattura lo schermo e lo analizza con il LLM vision.
     Richiede un modello con supporto immagini (llava, qwen2-vl, ecc.).
@@ -55,7 +57,7 @@ async def rpa_analyze():
 
 
 @router.post("/rpa/click")
-async def rpa_click(payload: RPAClickRequest):
+async def rpa_click(payload: RPAClickRequest, user: dict = Depends(get_current_user)):
     """
     Esegue un click del mouse alle coordinate specificate.
 
@@ -83,7 +85,7 @@ async def rpa_click(payload: RPAClickRequest):
 
 
 @router.post("/rpa/type")
-async def rpa_type(payload: RPATypeRequest):
+async def rpa_type(payload: RPATypeRequest, user: dict = Depends(get_current_user)):
     """
     Digita testo nella finestra attiva.
 
@@ -107,7 +109,7 @@ async def rpa_type(payload: RPATypeRequest):
 
 
 @router.post("/rpa/hotkey")
-async def rpa_hotkey(payload: RPAHotkeyRequest):
+async def rpa_hotkey(payload: RPAHotkeyRequest, user: dict = Depends(get_current_user)):
     """
     Preme una combinazione di tasti.
 
@@ -134,7 +136,7 @@ async def rpa_hotkey(payload: RPAHotkeyRequest):
 
 
 @router.post("/rpa/open_app")
-async def rpa_open_app(payload: RPAOpenAppRequest):
+async def rpa_open_app(payload: RPAOpenAppRequest, user: dict = Depends(get_current_user)):
     """
     Apre un'applicazione per nome.
 
@@ -156,7 +158,7 @@ async def rpa_open_app(payload: RPAOpenAppRequest):
 
 
 @router.post("/rpa/open_file")
-async def rpa_open_file(payload: RPAOpenFileRequest):
+async def rpa_open_file(payload: RPAOpenFileRequest, user: dict = Depends(get_current_user)):
     """
     Apre un file con l'app specificata o quella predefinita.
 
@@ -178,7 +180,7 @@ async def rpa_open_file(payload: RPAOpenFileRequest):
 
 
 @router.post("/rpa/scroll")
-async def rpa_scroll(payload: RPAScrollRequest):
+async def rpa_scroll(payload: RPAScrollRequest, user: dict = Depends(get_current_user)):
     """
     Esegue lo scroll nella finestra attiva.
 
@@ -198,7 +200,7 @@ async def rpa_scroll(payload: RPAScrollRequest):
 
 
 @router.post("/rpa/drag")
-async def rpa_drag(payload: RPADragRequest):
+async def rpa_drag(payload: RPADragRequest, user: dict = Depends(get_current_user)):
     """
     Esegue un drag & drop tra due coordinate.
 
@@ -218,7 +220,7 @@ async def rpa_drag(payload: RPADragRequest):
 
 
 @router.get("/rpa/screen_info")
-async def rpa_screen_info():
+async def rpa_screen_info(user: dict = Depends(get_current_user)):
     """Ritorna risoluzione schermo e posizione corrente del mouse."""
     config = get_config()
     actions = get_actions(config)
@@ -231,7 +233,7 @@ async def rpa_screen_info():
 
 
 @router.post("/rpa/command")
-async def rpa_command(payload: RPACommandRequest):
+async def rpa_command(payload: RPACommandRequest, user: dict = Depends(get_current_user)):
     """
     Esegue un comando RPA in linguaggio naturale.
     Equivalente a parlare direttamente a JARVIS.

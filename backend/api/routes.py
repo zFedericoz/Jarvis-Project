@@ -2,7 +2,9 @@ import asyncio
 import json
 import logging
 
-from fastapi import APIRouter
+from fastapi import APIRouter, Depends
+
+from .auth import get_current_user
 
 import skills
 from .dependencies import get_config, get_actions, get_memory
@@ -34,7 +36,7 @@ router.include_router(rpa_router)
 # ══════════════════════════════════════════════════════════════════════════════
 
 @router.post("/git/command")
-async def git_command(payload: GitRequest):
+async def git_command(payload: GitRequest, user: dict = Depends(get_current_user)):
     """
     Esegue un comando Git via API REST.
 
@@ -66,7 +68,7 @@ async def git_command(payload: GitRequest):
 
 
 @router.get("/git/status")
-async def git_status(repo_path: str | None = None):
+async def git_status(repo_path: str | None = None, user: dict = Depends(get_current_user)):
     """Shortcut per git status."""
     config = get_config()
     actions = get_actions(config)
@@ -83,7 +85,7 @@ async def git_status(repo_path: str | None = None):
 
 
 @router.get("/git/log")
-async def git_log(repo_path: str | None = None, n: int = 10):
+async def git_log(repo_path: str | None = None, n: int = 10, user: dict = Depends(get_current_user)):
     """Shortcut per git log con N commit."""
     config = get_config()
     actions = get_actions(config)
@@ -100,7 +102,7 @@ async def git_log(repo_path: str | None = None, n: int = 10):
 
 
 @router.post("/git/commit")
-async def git_commit(repo_path: str | None = None):
+async def git_commit(repo_path: str | None = None, user: dict = Depends(get_current_user)):
     """
     Esegue git add -A + commit con messaggio generato dall'LLM.
     Shortcut per il frontend (pulsante "Commit" nella dashboard).
@@ -120,7 +122,7 @@ async def git_commit(repo_path: str | None = None):
 
 
 @router.post("/git/push")
-async def git_push(repo_path: str | None = None):
+async def git_push(repo_path: str | None = None, user: dict = Depends(get_current_user)):
     """Esegue git push."""
     config = get_config()
     actions = get_actions(config)
@@ -141,7 +143,7 @@ async def git_push(repo_path: str | None = None):
 # ══════════════════════════════════════════════════════════════════════════════
 
 @router.post("/terminal/run")
-async def terminal_run(payload: TerminalRequest):
+async def terminal_run(payload: TerminalRequest, user: dict = Depends(get_current_user)):
     """
     Esegue un comando nel terminale sicuro.
 
@@ -167,7 +169,7 @@ async def terminal_run(payload: TerminalRequest):
 
 
 @router.get("/terminal/history")
-async def terminal_history():
+async def terminal_history(user: dict = Depends(get_current_user)):
     """Ritorna lo storico dei comandi eseguiti (ultimi 50, più recenti prima)."""
     config = get_config()
     actions = get_actions(config)
@@ -182,7 +184,7 @@ async def terminal_history():
 
 
 @router.get("/terminal/allowed")
-async def terminal_allowed():
+async def terminal_allowed(user: dict = Depends(get_current_user)):
     """
     Ritorna la mappa dei comandi consentiti nelle categorie abilitate.
     Utile per il frontend (mostrare all'utente cosa può fare).
@@ -206,7 +208,7 @@ async def terminal_allowed():
 # ══════════════════════════════════════════════════════════════════════════════
 
 @router.post("/focus/start")
-async def focus_start(payload: FocusStartRequest = FocusStartRequest()):
+async def focus_start(payload: FocusStartRequest = FocusStartRequest(), user: dict = Depends(get_current_user)):
     """
     Avvia una sessione Pomodoro.
     Blocca i siti distraenti e attiva Focus Assist (Windows).
@@ -227,7 +229,7 @@ async def focus_start(payload: FocusStartRequest = FocusStartRequest()):
 
 
 @router.post("/focus/stop")
-async def focus_stop():
+async def focus_stop(user: dict = Depends(get_current_user)):
     """Ferma la sessione focus e sblocca i siti."""
     config = get_config()
     actions = get_actions(config)
@@ -241,7 +243,7 @@ async def focus_stop():
 
 
 @router.post("/focus/pause")
-async def focus_pause():
+async def focus_pause(user: dict = Depends(get_current_user)):
     """Mette in pausa il timer focus (sblocca i siti temporaneamente)."""
     config = get_config()
     actions = get_actions(config)
@@ -254,7 +256,7 @@ async def focus_pause():
 
 
 @router.post("/focus/resume")
-async def focus_resume():
+async def focus_resume(user: dict = Depends(get_current_user)):
     """Riprende una sessione focus in pausa."""
     config = get_config()
     actions = get_actions(config)
@@ -267,7 +269,7 @@ async def focus_resume():
 
 
 @router.get("/focus/status")
-async def focus_status():
+async def focus_status(user: dict = Depends(get_current_user)):
     """
     Ritorna lo stato corrente della sessione focus.
 
@@ -291,7 +293,7 @@ async def focus_status():
 
 
 @router.post("/focus/sites/add")
-async def focus_add_site(payload: FocusSiteRequest):
+async def focus_add_site(payload: FocusSiteRequest, user: dict = Depends(get_current_user)):
     """
     Aggiunge un sito alla blacklist focus (persistente tra sessioni).
 
@@ -309,7 +311,7 @@ async def focus_add_site(payload: FocusSiteRequest):
 
 
 @router.post("/focus/sites/remove")
-async def focus_remove_site(payload: FocusSiteRequest):
+async def focus_remove_site(payload: FocusSiteRequest, user: dict = Depends(get_current_user)):
     """
     Rimuove un sito dalla blacklist focus.
 
@@ -327,7 +329,7 @@ async def focus_remove_site(payload: FocusSiteRequest):
 
 
 @router.get("/focus/sites")
-async def focus_list_sites():
+async def focus_list_sites(user: dict = Depends(get_current_user)):
     """Ritorna la lista dei siti bloccati durante il focus."""
     config = get_config()
     actions = get_actions(config)
@@ -347,7 +349,7 @@ async def focus_list_sites():
 # ══════════════════════════════════════════════════════════════════════════════
 
 @router.get("/market/quote")
-async def market_quote(symbol: str = "AAPL"):
+async def market_quote(symbol: str = "AAPL", user: dict = Depends(get_current_user)):
     loop = asyncio.get_event_loop()
     result = await loop.run_in_executor(None, lambda: skills.execute("market_data", action="quote", symbol=symbol))
     try:
@@ -357,7 +359,7 @@ async def market_quote(symbol: str = "AAPL"):
 
 
 @router.get("/market/history")
-async def market_history(symbol: str = "AAPL", period: str = "1mo", interval: str = "1d"):
+async def market_history(symbol: str = "AAPL", period: str = "1mo", interval: str = "1d", user: dict = Depends(get_current_user)):
     loop = asyncio.get_event_loop()
     result = await loop.run_in_executor(None, lambda: skills.execute("market_data", action="history", symbol=symbol, period=period, interval=interval))
     try:
@@ -367,7 +369,7 @@ async def market_history(symbol: str = "AAPL", period: str = "1mo", interval: st
 
 
 @router.get("/market/search")
-async def market_search(q: str = "Tesla"):
+async def market_search(q: str = "Tesla", user: dict = Depends(get_current_user)):
     loop = asyncio.get_event_loop()
     result = await loop.run_in_executor(None, lambda: skills.execute("market_data", action="search", query=q))
     try:
@@ -377,7 +379,7 @@ async def market_search(q: str = "Tesla"):
 
 
 @router.get("/market/news")
-async def market_news(symbol: str = "AAPL"):
+async def market_news(symbol: str = "AAPL", user: dict = Depends(get_current_user)):
     loop = asyncio.get_event_loop()
     result = await loop.run_in_executor(None, lambda: skills.execute("market_data", action="news", symbol=symbol))
     try:

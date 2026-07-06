@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef } from "react";
 import { C, mono } from "../utils/theme";
-import { fetchFromBest } from "../utils/fetch";
+import { fetchFromBest, fetchWithAuth } from "../utils/fetch";
 
 const HOST_METRICS_URL = "http://localhost:18765";
 const DOCKER_API = "";
@@ -29,7 +29,10 @@ export function SystemLog({ compact }: { compact?: boolean }) {
   const endRef = useRef<HTMLDivElement>(null!);
   useEffect(() => {
     const fetchLogs = async () => {
-      const d = await fetchFromBest([`${HOST_METRICS_URL}/api/system/logs`, `${DOCKER_API}/api/system/logs`]);
+      let d = await fetchFromBest([`${HOST_METRICS_URL}/api/system/logs`], 2000);
+      if (!d) {
+        try { const r = await fetchWithAuth(`${DOCKER_API}/api/system/logs`); if (r.ok) d = await r.json(); } catch {}
+      }
       if (d?.logs) setLogs(d.logs.slice(-20));
       setLoading(false);
     };
