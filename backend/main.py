@@ -291,6 +291,14 @@ async def _warmup_all(config):
         await loop.run_in_executor(None, llm.warmup)
         logger.info("  LLM modello pronto")
 
+        # ── Self-improvement scheduler ───────────────
+        try:
+            _, _, multiagent = get_brain(config)
+            multiagent._self_improvement.schedule_daily_evaluation()
+            logger.info("  Self-improvement scheduler avviato")
+        except Exception as e:
+            logger.warning(f"  Self-improvement scheduler fallito: {e}")
+
         # ── Step 7: Vision monitoring continuo ───────────
         try:
             from vision.camera import Camera

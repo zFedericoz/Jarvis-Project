@@ -253,6 +253,11 @@ class MultiAgent:
         if rag_ctx:
             extra_parts.append(rag_ctx)
 
+        few_shot = self._self_improvement.search_examples(query, intent, n=2)
+        if few_shot:
+            few_shot_block = "# Esempi di risposte di alta qualità a domande simili\n" + "\n\n".join(few_shot)
+            extra_parts.append(few_shot_block)
+
         rag_already_covers = bool(rag_ctx)
         if self._web_searcher.needs_search(query) and not rag_already_covers:
             logger.info(f"Web search attivata per: {query[:80]}")

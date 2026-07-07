@@ -163,6 +163,22 @@ async def run_self_evaluation(user: dict = Depends(get_current_user)):
     return report
 
 
+@router.post("/self-improvement/dataset")
+async def export_dataset(user: dict = Depends(get_current_user)):
+    config = get_config()
+    _, _, multiagent = get_brain(config)
+    path = multiagent._self_improvement.export_finetuning_dataset()
+    return {"status": "ok", "path": str(path)}
+
+
+@router.post("/self-improvement/schedule")
+async def start_scheduler(user: dict = Depends(get_current_user)):
+    config = get_config()
+    _, _, multiagent = get_brain(config)
+    multiagent._self_improvement.schedule_daily_evaluation()
+    return {"status": "scheduler_started"}
+
+
 def _build_pdf(messages: list[dict]) -> bytes:
     from fpdf import FPDF
     pdf = FPDF(orientation="P", unit="mm", format="A4")
