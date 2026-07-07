@@ -157,8 +157,16 @@ https://github.com/Picovoice/porcupine/tree/master/resources/keyword_files/windo
 - **Cache semantica**: 2000 entry, TTL 4h, riduce chiamate LLM per domande simili
 - Web search automatico (DuckDuckGo) per domande su notizie/meteo/attualità
 - Routing a 5 specialisti (code, creative, research, action, general)
-- Reflection engine per auto-valutazione qualità (disabilitabile su CPU)
+- Reflection engine per auto-valutazione qualità su TUTTE le risposte
 - Feedback utente (▲/▼) salvato in `data/feedback.jsonl`
+
+### Auto-miglioramento continuo (Self-Improvement)
+- **Reflection universale**: ogni risposta viene auto-valutata (score 0-10) e se sufficiente (>7) salvata come esempio positivo nella knowledge base
+- **Self-RAG**: prima di rispondere, cerca nella knowledge base esempi di alta qualità su domande simili e li inietta come few-shot
+- **Bad feedback handling**: quando l'utente dà pollice giù, genera automaticamente una versione migliorata e la salva come correzione permanente
+- **Auto-tuning**: ogni 50 risposte analizza la media rating e aggiusta automaticamente la soglia RAG
+- **Benchmark giornaliero**: esegue un test su 5 domande campione, traccia accuracy e salva report in `data/self_improvement_benchmark.json`
+- **Fine-tuning dataset**: esporta coppie Q&A da feedback.jsonl + knowledge base in `data/finetuning_dataset.jsonl`
 
 ### Git integration
 - `"committa tutto"` → auto `git add -A` + messaggio Conventional Commit generato dal LLM
@@ -238,6 +246,10 @@ https://github.com/Picovoice/porcupine/tree/master/resources/keyword_files/windo
 | `POST /api/rpa/click` | Click mouse |
 | `POST /api/rpa/screenshot` | Screenshot desktop |
 | `POST /api/rpa/analyze` | Screenshot + analisi AI |
+| `GET /api/self-improvement/stats` | Statistiche auto-miglioramento |
+| `GET /api/self-improvement/benchmark` | Report ultimo benchmark |
+| `POST /api/self-improvement/benchmark` | Esegui benchmark manuale |
+| `GET /api/self-improvement/knowledge-base` | Elenca knowledge base |
 
 ## Comandi vocali d'esempio
 

@@ -47,6 +47,9 @@ Jarvis-Project/
 │   │   ├── ephemeral.py        Redis: memoria a breve termine (TTL 1h)
 │   │   ├── persistent.py       ChromaDB: memoria a lungo termine (vettoriale) + preferenze utente
 │   │   └── rag_indexer.py      Indicizzatore documenti (PDF/TXT/MD) per RAG, watcher automatico
+│   ├── self_improvement/
+│   │   ├── engine.py           Reflection universale + Self-RAG + knowledge base
+│   │   └── benchmark.py        Benchmark giornaliero (5 domande campione)
 │   ├── services/
 │   │   ├── briefing.py         Briefing quotidiano con notifica via WebSocket
 │   │   └── __init__.py
@@ -212,6 +215,15 @@ Browser (microfono)  ──PCM16──>  WebSocket /api/ws/audio
 | GET | `/api/terminal/history` | Storico comandi (ultimi 50) |
 | GET | `/api/terminal/allowed` | Mappa comandi consentiti |
 
+### Self-Improvement (Step 9)
+| Metodo | Endpoint | Descrizione |
+|--------|----------|-------------|
+| GET | `/api/self-improvement/stats` | Statistiche: riflessioni, punteggio medio, benchmark |
+| GET | `/api/self-improvement/benchmark` | Report ultimo benchmark giornaliero |
+| POST | `/api/self-improvement/benchmark` | Esegui benchmark su 5 domande campione |
+| GET | `/api/self-improvement/knowledge-base` | Elenca esempi nella knowledge base |
+| POST | `/api/self-improvement/knowledge-base/clear` | Pulisci knowledge base |
+
 ### Focus (Step 6)
 | Metodo | Endpoint | Descrizione |
 |--------|----------|-------------|
@@ -262,7 +274,7 @@ Tutti i container sulla rete `jarvis-net`
 
 ## Architettura interna del backend
 
-### Pipeline di risposta (MultiAgent)
+### Pipeline di risposta (MultiAgent + Self-Improvement)
 
 ```
 POST /api/chat  ──>  IntentRouter.route(text)
@@ -287,11 +299,25 @@ POST /api/chat  ──>  IntentRouter.route(text)
                     │           │
                     └─────┬─────┘
                           │
+                    Self-RAG  ←── Knowledge base
+                    (esempi qualità)
+                          │
                     Contesto utente
                     (preferenze)
                           │
                     LLM.chat_with_reflection()
-                    (reflection disabilitato di default)
+                    (reflection OBBLIGATORIO su tutte)
+                          │
+                    ┌─────┴─────┐
+                    │           │
+              Reflection     Bad feedback?
+              (score 0-10)   → genera correzione
+                    │         → salva in KB
+              score > 7?
+              → salva in KB
+                    │
+              Auto-tuning ogni 50 risposte
+              (aggiusta soglia RAG)
 ```
 
 ### Chat session flow
