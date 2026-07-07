@@ -14,6 +14,7 @@ import logging, re, json, hashlib
 from brain.semantic_cache import SemanticCache
 from brain.rag_searcher import RAGSearcher
 from brain.web_searcher import WebSearcher
+from brain.self_improvement import SelfImprovement
 
 logger = logging.getLogger("jarvis.brain.multiagent")
 
@@ -103,7 +104,7 @@ You are a general assistant. Rules:
 """,
 }
 
-_REFLECTION_INTENTS = {"code", "research", "creative"}
+_USE_REFLECTION = True  # Always reflect on non-streaming responses
 
 _SUMMARY_THRESHOLD = 4000
 
@@ -145,6 +146,7 @@ class MultiAgent:
         self._max_react_rounds = 5
         self._rag_searcher = RAGSearcher(persistent_memory)
         self._web_searcher = WebSearcher()
+        self._self_improvement = SelfImprovement(persistent_memory, llm_client, self._rag_searcher)
 
     def _map_intent(self, intent: str) -> str:
         return INTENT_TO_SPECIALIST.get(intent, "general")
@@ -219,7 +221,9 @@ class MultiAgent:
              language: str = "it", intent: str = "general",
              search_query: str | None = None) -> str:
         self._last_sources = []
-        return "".join(self._chat_stream_impl(message, context, language, intent, search_query, use_reflection=intent in _REFLECTION_INTENTS))
+        result = "".join(self._chat_stream_impl(message, context, language, intent, search_query, use_reflection=_USE_REFLECTION))
+        self._self_improvement.record_response(message, result, intent, language)
+        return result
 
     def chat_stream(self, message: str, context: list[dict] | None = None,
                     language: str = "it", intent: str = "general",
@@ -277,12 +281,13 @@ class MultiAgent:
             context_for_llm = None
 
         if tools:
-            yield from self._react_loop(message, context_for_llm, language, full_specialist, tools)
+            yield from self._react_loop(message, context_for_llm, language, full_specialist, tools, intent)
             return
 
         if use_reflection:
             result = self.llm.chat_with_reflection(message, context_for_llm, language, extra_system_prompt=full_specialist, min_score=7, max_reflect_rounds=1)
             self._store_cache(message, language, intent, result)
+            self._self_improvement.record_response(message, result, intent, language)
             yield result
         else:
             result_chars = []
@@ -292,9 +297,11 @@ class MultiAgent:
                     yield data
             final = "".join(result_chars)
             self._store_cache(message, language, intent, final)
+            self._self_improvement.record_response(message, final, intent, language)
 
     def _react_loop(self, message: str, context: list[dict] | None,
-                    language: str, system_prompt: str, tools: list[dict]):
+                    language: str, system_prompt: str, tools: list[dict],
+                    intent: str = "general"):
         messages = [{"role": "system", "content": system_prompt}]
         if context:
             messages.extend(context)
@@ -366,7 +373,11 @@ class MultiAgent:
             model=self.llm.model, messages=messages,
             options=self.llm._options(), keep_alive=-1, stream=True,
         )
+        final_chars = []
         for chunk in stream:
             c = chunk.get("message", {}).get("content", "")
             if c:
-                yield fix_year(c)
+                fixed = fix_year(c)
+                final_chars.append(fixed)
+                yield fixed
+        self._self_improvement.record_response(message, "".join(final_chars), intent, language)

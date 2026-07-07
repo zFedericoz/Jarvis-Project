@@ -245,6 +245,15 @@ async def submit_feedback(fb: FeedbackRequest, user: dict = Depends(get_current_
         with open(FEEDBACK_FILE, "a", encoding="utf-8") as f:
             f.write(json.dumps(entry, ensure_ascii=False) + "\n")
         logger.info(f"Feedback: rating={fb.rating}, lang={fb.language}, intent={fb.intent}")
+
+        if int(fb.rating) <= 3:
+            config = get_config()
+            _, _, multiagent = get_brain(config)
+            multiagent._self_improvement.handle_bad_feedback(
+                fb.user_message, fb.assistant_response,
+                int(fb.rating), fb.intent, fb.language,
+            )
+
         return {"status": "saved", "rating": fb.rating}
     except Exception as e:
         logger.error(f"Feedback save failed: {e}", exc_info=True)

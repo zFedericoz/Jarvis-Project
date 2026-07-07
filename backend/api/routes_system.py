@@ -155,6 +155,14 @@ async def set_rag_threshold(body: RagThresholdRequest, user: dict = Depends(get_
     return {"threshold": rag_distance_threshold}
 
 
+@router.post("/self-improvement/evaluate")
+async def run_self_evaluation(user: dict = Depends(get_current_user)):
+    config = get_config()
+    _, _, multiagent = get_brain(config)
+    report = multiagent._self_improvement.run_evaluation()
+    return report
+
+
 def _build_pdf(messages: list[dict]) -> bytes:
     from fpdf import FPDF
     pdf = FPDF(orientation="P", unit="mm", format="A4")
