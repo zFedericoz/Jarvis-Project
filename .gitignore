@@ -8,6 +8,9 @@ build/
 *.so
 .venv/
 venv/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
 
 # ── Runtime data ─────────────────────────────────
 data/
@@ -20,9 +23,16 @@ models/
 # ── Frontend ────────────────────────────────────
 frontend/node_modules/
 frontend/dist/
+frontend/.vite/
+*.tsbuildinfo
 
 # ── Assets generati / temporanei ─────────────────
 globe-40.gif.webp
+*.bak
+*.old
+*.backup
+!backend/Dockerfile.backup
+*.log
 
 # ── IDE / OS ────────────────────────────────────
 .idea/
@@ -32,3 +42,6 @@ globe-40.gif.webp
 *~
 .DS_Store
 Thumbs.db
+
+# 🔑 Environment variables with secrets
+.env

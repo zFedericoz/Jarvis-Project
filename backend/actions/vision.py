@@ -8,6 +8,10 @@ class Vision(BaseAction):
         super().__init__(config)
         self._camera = None
 
+    def set_camera(self, camera):
+        """Condivide l'istanza Camera creata in main.py (monitoring + on-demand)."""
+        self._camera = camera
+
     def _get_camera(self):
         if self._camera is None:
             try:
@@ -15,7 +19,7 @@ class Vision(BaseAction):
                 vision_cfg = self.config.get("vision", {})
                 self._camera = Camera(
                     model_path=vision_cfg.get("model", "yolov8n.pt"),
-                    device=vision_cfg.get("device", "cpu"),
+                    device=vision_cfg.get("device", "cuda"),
                     camera_id=vision_cfg.get("camera_id", 0),
                 )
             except Exception as e:

@@ -1,0 +1,9 @@
+name: terminal
+description: "Esegue comandi shell in categorie consentite (info, filesystem, python, docker_info)."
+parameters:
+  type: object
+  properties:
+    command:
+      type: string
+      description: "Comando shell da eseguire"
+  required: [command]

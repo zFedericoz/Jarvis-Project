@@ -1,0 +1,10 @@
+name: system_control
+description: "Controlla il sistema operativo. AZIONI PERICOLOSE come shutdown, restart, lock, sleep richiedono conferma esplicita."
+parameters:
+  type: object
+  properties:
+    action:
+      type: string
+      description: "Azione da eseguire: status, shutdown, restart, lock, volume_up, volume_down, mute, sleep, hibernate"
+      enum: [status, shutdown, restart, lock, volume_up, volume_down, mute, sleep, hibernate]
+  required: [action]

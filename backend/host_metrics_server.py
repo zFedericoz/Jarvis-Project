@@ -38,23 +38,55 @@ _system_logs.append({
 
 
 def _get_temperature():
+    """Tenta di leggere la temperatura CPU con piu` metodi."""
+    # 1. psutil (funziona solo su Linux)
     try:
         temps = psutil.sensors_temperatures()
         if temps:
             for name, entries in temps.items():
                 if entries:
                     return round(entries[0].current, 1)
-        if platform.system() == "Windows":
-            result = subprocess.run(
-                ["wmic", "/namespace:\\\\root\\wmi", "path", "MSAcpi_ThermalZoneTemperature", "get", "CurrentTemperature"],
-                capture_output=True, text=True, timeout=5,
-            )
-            match = re.search(r"(\d+)", result.stdout)
-            if match:
-                kelvin = int(match.group(1))
-                return round(kelvin / 10 - 273.15, 1)
     except Exception:
         pass
+
+    # 2. PowerShell Get-CimInstance su Windows
+    if platform.system() == "Windows":
+        try:
+            ps_cmd = (
+                'Get-CimInstance -Namespace "root/wmi" -ClassName "MSAcpi_ThermalZoneTemperature" '
+                '| Where-Object { $_.CurrentTemperature -ne 0 } '
+                '| Select-Object -First 1 -ExpandProperty CurrentTemperature'
+            )
+            result = subprocess.run(
+                ["powershell", "-NoProfile", "-Command", ps_cmd],
+                capture_output=True, text=True, timeout=5,
+            )
+            raw = result.stdout.strip()
+            if raw:
+                kelvin = int(raw)
+                if kelvin > 0:
+                    return round(kelvin / 10 - 273.15, 1)
+        except Exception:
+            pass
+
+        # 3. Fallback: performance counters (funziona su alcuni notebook)
+        try:
+            ps_cmd = (
+                'Get-CimInstance -ClassName "Win32_PerfFormattedData_Counters_ThermalZoneInformation" '
+                '| Select-Object -First 1 -ExpandProperty Temperature'
+            )
+            result = subprocess.run(
+                ["powershell", "-NoProfile", "-Command", ps_cmd],
+                capture_output=True, text=True, timeout=5,
+            )
+            raw = result.stdout.strip()
+            if raw:
+                val = int(raw)
+                if val > 0:
+                    return round(val / 10, 1)
+        except Exception:
+            pass
+
     return None
 
 

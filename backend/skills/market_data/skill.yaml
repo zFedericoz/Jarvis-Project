@@ -1,0 +1,22 @@
+name: market_data
+description: "Ottiene dati finanziari: quotazioni azionarie (tutti i mercati mondiali), crypto, storico prezzi, notizie finanziarie. Usa simboli standard (es. AAPL, TSLA, ^GSPC per S&P500, BTC-USD, EURUSD=X)."
+parameters:
+  type: object
+  properties:
+    action:
+      type: string
+      description: "Tipo di richiesta: quote, history, search, news"
+      enum: [quote, history, search, news]
+    symbol:
+      type: string
+      description: "Simbolo del titolo (es. AAPL, TSLA, ^GSPC, BTC-USD, EURUSD=X). Opzionale per search."
+    query:
+      type: string
+      description: "Testo per ricerca simboli (usato con action=search)."
+    period:
+      type: string
+      description: "Periodo storico: 1d, 5d, 1mo, 3mo, 6mo, 1y, 2y, 5y, max. Default: 1mo."
+    interval:
+      type: string
+      description: "Intervall temporale: 1m, 2m, 5m, 15m, 30m, 60m, 1d, 5d, 1wk, 1mo. Default: 1d."
+  required: [action]

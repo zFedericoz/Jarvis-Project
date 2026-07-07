@@ -1,8 +1,30 @@
 import asyncio
 import logging
+import re
 import numpy as np
 from fastapi import WebSocket
 from wake_word.processor import get_wake_word_processor
+
+
+def _split_sentences(text: str, min_chars: int = 30) -> list[str]:
+    """Divide il testo in frasi per sintesi TTS progressiva.
+
+    Usa i delimitatori .?! e applica una soglia minima di caratteri
+    per evitare frammenti troppo corti (es. 'Ok.' 'Sì.').
+    Restituisce almeno un segmento anche se sotto soglia.
+    """
+    parts = re.split(r'(?<=[.?!])\s+', text)
+    parts = [p.strip() for p in parts if p.strip()]
+    merged = []
+    buf = ""
+    for p in parts:
+        buf = (buf + " " + p).strip()
+        if len(buf) >= min_chars:
+            merged.append(buf)
+            buf = ""
+    if buf:
+        merged.append(buf)
+    return merged if merged else [text]
 
 logger = logging.getLogger("jarvis.api.ws")
 
@@ -40,6 +62,11 @@ async def handle_wake_word(ws: WebSocket, config: dict):
         sensitivity=ww_config["sensitivity"],
         model_path=ww_config.get("model_path", ""),
     )
+
+    if processor is None:
+        logger.warning("Wake word non disponibile — chiusura connessione")
+        await ws.send_json({"type": "error", "message": "Wake word non disponibile"})
+        return
 
     frame_size = processor.frame_length
     buffer = bytearray()
@@ -88,16 +115,16 @@ async def handle_audio_stream(ws, stt, brain, router, context, actions, tts, per
 
                 enriched = text
                 if persistent_memory:
-                    memories = persistent_memory.search(text, n_results=3)
+                    memories = persistent_memory.search(text, n_results=5)
                     if memories:
-                        memory_context = "\n".join(f"Related memory: {m}" for m in memories)
+                        memory_context = "\n".join(f"Related memory: {m['text']}" for m in memories)
                         enriched = f"{text}\n\n{memory_context}"
 
                 intent = router.route(enriched)
                 if intent in actions:
                     response = await actions[intent].execute(enriched)
                 else:
-                    response = brain.chat(enriched, context.get_context(), language=lang, intent=intent)
+                    response = brain.chat(enriched, context.get_context(), language=lang, intent=intent, search_query=enriched)
 
                 context.add_turn("assistant", response)
 
@@ -112,10 +139,15 @@ async def handle_audio_stream(ws, stt, brain, router, context, actions, tts, per
                     "language": lang,
                 })
 
+                # Streaming TTS: dividi la risposta in frasi, sintetizza e
+                # invia l'audio frase per frase. Il frontend gestisce
+                # blob audio multipli in sequenza.
                 await ws.send_json({"type": "speaking_start"})
-                audio_bytes = await tts.synthesize_async(response, language=lang)
-                if audio_bytes:
-                    await ws.send_bytes(audio_bytes)
+                sentences = _split_sentences(response)
+                for sentence in sentences:
+                    audio_bytes = await tts.synthesize_async(sentence, language=lang)
+                    if audio_bytes:
+                        await ws.send_bytes(audio_bytes)
                 await ws.send_json({"type": "speaking_end"})
                 await ws.send_json({"type": "idle"})
 

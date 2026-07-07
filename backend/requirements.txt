@@ -1,24 +1,84 @@
-fastapi==0.115.0
-uvicorn[standard]==0.30.6
-pydantic>=2.0.0
+# =============================================================================
+# J.A.R.V.I.S. Backend — Requirements v2.1
+# =============================================================================
+
+# API Framework
+fastapi>=0.111.0
+uvicorn[standard]>=0.29.0
 websockets>=12.0
-ollama>=0.3.0
-faster-whisper>=1.0.3
-numpy>=1.26.0
-chromadb>=0.5.0
-PyYAML>=6.0.2
-pvporcupine==1.9.5
+pydantic>=2.7.0
+slowapi>=0.1.9
+
+# LLM
+ollama>=0.2.0
+
+# STT
+faster-whisper>=1.0.0
+
+# TTS primario (locale)
+kokoro-onnx>=0.5.0
 soundfile>=0.12.1
-duckduckgo_search>=6.2.0
-psutil>=6.0.0
-httpx>=0.27.0
-Pillow>=10.4.0
-redis>=5.1.0
-edge-tts>=6.1.0
-python-multipart>=0.0.9
-TTS>=0.22.0
+
+# TTS fallback cloud
+edge-tts>=6.1.9
+
+# PyTorch con CUDA 12.4 (per GPU NVIDIA)
+# Installazione: pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu124
+# torch>=2.0.0  # scommentare per CPU-only
+
+# TTS voice cloning (XTTS v2) — installazione manuale (richiede GPU, numpy<2):
+# pip install TTS>=0.22.0
+
+# Memory
+redis>=5.0.0
+chromadb>=0.5.0
+
+# Step 2 — RAG (indicizzazione PDF)
+pypdf>=4.0.0
+
+# File upload — estrazione testo da DOCX e XLSX
+python-docx>=1.1.0
+openpyxl>=3.1.0
+
+# Step 3 — Briefing quotidiano
+httpx>=0.27.0        # già usato, serve per wttr.in meteo
+
+# Brain / NLP
 langdetect>=1.0.9
-opencv-python>=4.10.0
-ultralytics>=8.3.0
+duckduckgo-search>=6.0.0
+
+# Config
+pyyaml>=6.0.1
+python-dotenv>=1.0.0
+
+# Vision (YOLOv8 — include opencv-python come dipendenza)
+ultralytics>=8.2.0
+
+# Spotify Web API
+spotipy>=2.24.0
+
+# Wake word (installazione separata — no PyPI)
+pvporcupine==1.9.5
+
+# Utilities
+numpy
+python-multipart>=0.0.9
+psutil>=5.9.0
+
+# Pillow (usato da RPA screenshot, serve anche a kokoro/soundfile)
+pillow>=10.0.0
+
+# PDF Export
+fpdf2>=2.7.0
+
+# Monitoring
+prometheus-client>=0.19.0
+
+# Auth
+python-jose[cryptography]>=3.3.0
+bcrypt>=4.0.0
+
+# Testing
 pytest>=8.0.0
 pytest-asyncio>=0.24.0
+httpx>=0.27.0

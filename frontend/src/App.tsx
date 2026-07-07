@@ -1,290 +1,260 @@
-import { useState, useEffect, useRef, useCallback, type ReactNode, type FormEvent } from "react";
-import { Canvas, useFrame, type GroupProps } from "@react-three/fiber";
-import * as THREE from "three";
-import type { Group, Mesh } from "three";
+import { useState, useEffect, useRef, useCallback, type FormEvent } from "react";
+import { Canvas } from "@react-three/fiber";
+import Sidebar from "./components/Sidebar";
+import { ArcReactor3D } from "./components/ArcReactor3D";
+import { MarkdownRenderer } from "./components/MarkdownRenderer";
+import { Scanlines } from "./components/Scanlines";
+import { ErrorBoundary } from "./components/ErrorBoundary";
+import { MetricBadge } from "./components/MetricBadge";
+import { SystemLog } from "./components/SystemLog";
+import { ConfirmModal } from "./components/ConfirmModal";
+import { MarketPanel } from "./components/MarketPanel";
+import VoiceVisualizer from "./components/VoiceVisualizer";
+import HolographicDisplay from "./components/HolographicDisplay";
+import { Waveform } from "./components/Waveform";
+import { useStore } from "./hooks/useStore";
+import { useWebSocket } from "./hooks/useWebSocket";
+import { useWakeWord } from "./hooks/useWakeWord";
+import { useAudioStream } from "./hooks/useAudioStream";
+import { fetchFromBest, fetchWithAuth } from "./utils/fetch";
+import { THEMES, C, setTheme as applyTheme, font, mono } from "./utils/theme";
+import VectorViz from "./components/VectorViz";
+import TypewriterText from "./components/TypewriterText";
+import { API_URL, JARVIS_COLORS } from "./utils/constants";
+import type { WSMessage } from "./types";
 
 const HOST_METRICS_URL = "http://localhost:18765";
-const DOCKER_API = "";
 
-async function fetchFromBest(urls: string[]): Promise<any> {
-  for (const url of urls) {
-    try {
-      const r = await fetch(url, { signal: AbortSignal.timeout(2000) });
-      if (r.ok) return r.json();
-    } catch {}
-  }
-  return null;
+interface MetricSnapshot {
+  cpu: number; ram: number; temp: number|null; disk: number;
+  history: { cpu: number[]; ram: number[]; temp: number[]; disk: number[] };
+  processes: {pid:number;name:string;cpu:number;mem:number}[];
+  uptime: number; ram_gb: number; ram_total_gb: number; net_sent: number; net_recv: number;
 }
-
-const C = {
-  bg: "#050e14", bgPanel: "#071520", bgPanelHover: "#0a1e2e",
-  cyan: "#00e5ff", cyanDim: "#00b8cc", cyanFaint: "rgba(0,229,255,0.08)",
-  green: "#00ff88", greenDim: "#00cc6a", amber: "#ffaa00",
-  red: "#ff4455", purple: "#a855f7",
-  border: "rgba(0,229,255,0.18)", borderStrong: "rgba(0,229,255,0.45)",
-  text: "#c8eef8", textDim: "rgba(200,238,248,0.6)", textFaint: "rgba(200,238,248,0.3)",
-};
-
-const mono = "'Share Tech Mono', 'Courier New', monospace";
-
-function useInterval(cb: () => void, ms: number) {
-  const ref = useRef(cb);
-  useEffect(() => { ref.current = cb; }, [cb]);
-  useEffect(() => {
-    const id = setInterval(() => ref.current(), ms);
-    return () => clearInterval(id);
-  }, [ms]);
-}
-
-function useAnimFrame(cb: () => void) {
-  const ref = useRef(cb);
-  useEffect(() => { ref.current = cb; }, [cb]);
-  useEffect(() => {
-    let id: number;
-    const loop = () => { ref.current(); id = requestAnimationFrame(loop); };
-    id = requestAnimationFrame(loop);
-    return () => cancelAnimationFrame(id);
-  }, []);
-}
-
-function Scanlines() {
-  return (
-    <div style={{
-      pointerEvents: "none", position: "absolute", inset: 0, zIndex: 9999,
-      background: "repeating-linear-gradient(0deg, transparent, transparent 2px, rgba(0,0,0,0.07) 2px, rgba(0,0,0,0.07) 4px)",
-    }} />
-  );
-}
-
-function Panel({ children, style, title, accent = C.cyan }: {
-  children: ReactNode; style?: React.CSSProperties; title?: string; accent?: string;
-}) {
-  return (
-    <div style={{
-      background: C.bgPanel, border: `1px solid ${C.border}`,
-      borderTop: `1px solid ${accent}55`, borderRadius: 4,
-      padding: "10px 12px", position: "relative",
-      display: "flex", flexDirection: "column", overflow: "hidden", ...style,
-    }}>
-      {[["0%","0%","top","left"],["100%","0%","top","right"],["0%","100%","bottom","left"],["100%","100%","bottom","right"]].map(([l,t,v,h],i) => (
-        <div key={i} style={{
-          position:"absolute", [v]: -1, [h]: -1, width: 8, height: 8,
-          borderTop: v==="top" ? `1px solid ${accent}` : "none",
-          borderBottom: v==="bottom" ? `1px solid ${accent}` : "none",
-          borderLeft: h==="left" ? `1px solid ${accent}` : "none",
-          borderRight: h==="right" ? `1px solid ${accent}` : "none",
-        }}/>
-      ))}
-      {title && (
-        <div style={{ fontFamily: mono, fontSize: 10, letterSpacing: "0.2em", color: C.textDim, marginBottom: 8, textTransform: "uppercase", flexShrink: 0 }}>
-          ▸ {title}
-        </div>
-      )}
-      <div style={{ flex: 1, overflow: "hidden", display: "flex", flexDirection: "column" }}>
-        {children}
-      </div>
-    </div>
-  );
-}
-
-// ── 3D Reactor ────────────────────────────────────────────────────────────────
-function ReactorGeometry({ isResponding }: { isResponding: boolean }) {
-  const groupRef = useRef<Group>(null!);
-  useFrame((state) => {
-    const t = state.clock.getElapsedTime();
-    if (groupRef.current) {
-      groupRef.current.rotation.y = t * 0.5;
-      groupRef.current.rotation.x = 0.5 + Math.sin(t * 0.3) * 0.08;
-    }
-  });
-  return (
-    <group ref={groupRef}>
-      <mesh><torusGeometry args={[1.4, 0.05, 16, 100]} /><meshBasicMaterial color={isResponding ? C.green : C.cyan} wireframe /></mesh>
-      <mesh><torusGeometry args={[1.0, 0.02, 12, 64]} /><meshBasicMaterial color={C.cyanDim} wireframe /></mesh>
-      {Array.from({length:10}).map((_,i) => {
-        const a = (i/10)*Math.PI*2;
-        return (
-          <group key={i} rotation={[0,0,a] as unknown as GroupProps['rotation']}>
-            <mesh position={[1.2,0,0]}><boxGeometry args={[0.22,0.1,0.15]} /><meshBasicMaterial color={isResponding ? C.green : C.cyan} wireframe /></mesh>
-          </group>
-        );
-      })}
-      <mesh><sphereGeometry args={[0.35,32,32]} /><meshBasicMaterial color={isResponding ? "#ffffff" : C.cyan} /></mesh>
-    </group>
-  );
-}
-
-function HolographicWave3D({ id, onRemove }: { id: number; onRemove: (id: number) => void }) {
-  const meshRef = useRef<Mesh>(null!);
-  useFrame((_s, delta) => {
-    if (meshRef.current) {
-      meshRef.current.scale.x += delta * 2.8;
-      meshRef.current.scale.y += delta * 2.8;
-      meshRef.current.scale.z += delta * 2.8;
-      (meshRef.current.material as THREE.Material & {opacity:number}).opacity -= delta * 0.75;
-      if ((meshRef.current.material as THREE.Material & {opacity:number}).opacity <= 0) onRemove(id);
-    }
-  });
-  return (
-    <mesh ref={meshRef} rotation={[0.5,0,0]}>
-      <torusGeometry args={[1.4,0.02,8,64]} />
-      <meshBasicMaterial color={C.green} transparent opacity={1} wireframe />
-    </mesh>
-  );
-}
-
-function ArcReactor3D({ isResponding }: { isResponding: boolean }) {
-  const [waves, setWaves] = useState<{id:number}[]>([]);
-  useEffect(() => {
-    if (!isResponding) return;
-    const interval = setInterval(() => setWaves(p => [...p, {id: Date.now()+Math.random()}]), 450);
-    return () => clearInterval(interval);
-  }, [isResponding]);
-  const removeWave = (id:number) => setWaves(p => p.filter(w => w.id !== id));
-  return (
-    <div style={{display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",height:"100%",width:"100%",position:"relative"}}>
-      <div style={{width:"100%",height:"85%"}}>
-        <Canvas camera={{position:[0,0,3.8],fov:55}}>
-          <ambientLight intensity={0.8} />
-          <pointLight position={[5,5,5]} intensity={1.5} />
-          <ReactorGeometry isResponding={isResponding} />
-          {waves.map(w => <HolographicWave3D key={w.id} id={w.id} onRemove={removeWave} />)}
-        </Canvas>
-      </div>
-
-    </div>
-  );
-}
-
-// ── Line Chart ────────────────────────────────────────────────────────────────
-function LineChart({ data, color, max = 100, label }: { data: number[]; color: string; max?: number; label: string }) {
-  const canvasRef = useRef<HTMLCanvasElement>(null!);
-  useEffect(() => {
-    const c = canvasRef.current; if (!c) return;
-    const ctx = c.getContext("2d"); if (!ctx) return;
-    const W = c.width, H = c.height, pad = 18;
-    ctx.clearRect(0,0,W,H);
-    const val = data.length > 0 ? data[data.length-1] : 0;
-    ctx.fillStyle = C.text; ctx.font = "9px monospace";
-    ctx.textAlign = "right"; ctx.fillText(`${Math.round(val)}${label}`, W-2, 10);
-    ctx.textAlign = "left"; ctx.fillStyle = C.textFaint; ctx.fillText(label, 2, 10);
-    ctx.strokeStyle = color; ctx.lineWidth = 1.5; ctx.beginPath();
-    const draw = data.length < 2 ? [0,0] : data;
-    for (let i = 0; i < draw.length; i++) {
-      const x = pad + (i / Math.max(draw.length-1,1)) * (W-pad*2);
-      const y = H-4 - (draw[i]/max) * (H-14);
-      i === 0 ? ctx.moveTo(x,y) : ctx.lineTo(x,y);
-    }
-    ctx.stroke();
-    ctx.fillStyle = color; ctx.globalAlpha = 0.08;
-    const last = draw.length-1;
-    ctx.lineTo(pad+(last/Math.max(last,1))*(W-pad*2), H-4);
-    ctx.lineTo(pad, H-4);
-    ctx.closePath(); ctx.fill(); ctx.globalAlpha = 1;
-  });
-  return <canvas ref={canvasRef} width={280} height={50} style={{display:"block",width:"100%",height:50}} />;
-}
-
-// ── Real System Log ───────────────────────────────────────────────────────────
-function SystemLog() {
-  const [logs, setLogs] = useState<{timestamp:string;level:string;message:string}[]>([]);
-  const endRef = useRef<HTMLDivElement>(null!);
-  useEffect(() => {
-    const fetchLogs = async () => {
-      const d = await fetchFromBest([`${HOST_METRICS_URL}/api/system/logs`, `${DOCKER_API}/api/system/logs`]);
-      if (d?.logs) setLogs(d.logs.slice(-20));
-    };
-    fetchLogs(); const id = setInterval(fetchLogs, 3000);
-    return () => clearInterval(id);
-  }, []);
-  useEffect(() => { endRef.current?.scrollIntoView({behavior:"smooth"}); }, [logs]);
-  const colorMap: Record<string,string> = {warning:C.amber,error:C.red,info:C.cyan};
-  return (
-    <div style={{fontFamily:mono,fontSize:10,lineHeight:1.6,overflow:"auto",height:"100%",paddingRight:4}}>
-      {logs.length === 0 && <div style={{color:C.textFaint}}>In attesa di log di sistema...</div>}
-      {logs.map((l,i) => (
-        <div key={i} style={{color:colorMap[l.level]||C.textDim,whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>
-          {l.message}
-        </div>
-      ))}
-      <div ref={endRef} />
-    </div>
-  );
-}
-
-// ── Globe (animated WebP) ─────────────────────────────────────────────────────
-
-function GlobeImage() {
-  return (
-    <div style={{ position:"relative", display:"flex", alignItems:"center", justifyContent:"center" }}>
-      <div style={{
-        position:"absolute", inset:"10%", borderRadius:"50%",
-        boxShadow: `0 0 30px 10px ${C.cyanFaint}, inset 0 0 30px 10px rgba(0,0,0,0.3)`,
-        pointerEvents:"none",
-      }} />
-      <img src="/globe-40.gif.webp" alt="Globe"
-        style={{ width:"100%", maxWidth:260, display:"block", borderRadius:"50%" }}
-      />
-    </div>
-  );
-}
-
-// ── Waveform ──────────────────────────────────────────────────────────────────
-function Waveform({ active, color = C.cyan }: { active: boolean; color?: string }) {
-  const canvasRef = useRef<HTMLCanvasElement>(null!);
-  const phase = useRef(0);
-  useAnimFrame(() => {
-    const c = canvasRef.current; if (!c) return;
-    const ctx = c.getContext("2d"); if (!ctx) return;
-    const W = c.width, H = c.height;
-    ctx.clearRect(0,0,W,H);
-    if (!active) { ctx.strokeStyle = `${color}33`; ctx.lineWidth = 1; ctx.beginPath(); ctx.moveTo(0,H/2); ctx.lineTo(W,H/2); ctx.stroke(); return; }
-    phase.current += 0.15;
-    ctx.strokeStyle = color; ctx.lineWidth = 1.5; ctx.beginPath();
-    for (let x = 0; x < W; x++) {
-      const t = (x/W)*Math.PI*4;
-      const y = H/2 + Math.sin(t+phase.current)*(H*0.35);
-      x===0 ? ctx.moveTo(x,y) : ctx.lineTo(x,y);
-    }
-    ctx.stroke();
-  });
-  return <canvas ref={canvasRef} width={250} height={28} style={{display:"block",width:"100%"}} />;
-}
-
-// ── Main ──────────────────────────────────────────────────────────────────────
-interface MetricSnapshot { cpu: number; ram: number; temp: number|null; disk: number; history: { cpu: number[]; ram: number[]; temp: number[]; disk: number[] }; processes: {pid:number;name:string;cpu:number;mem:number}[]; uptime: number; ram_gb: number; ram_total_gb: number; net_sent: number; net_recv: number }
 
 export default function JarvisDashboard() {
   const [metrics, setMetrics] = useState<MetricSnapshot | null>(null);
-  const [listening, setListening] = useState(false);
-  const [isResponding, setIsResponding] = useState(false);
   const [chatInput, setChatInput] = useState("");
-  const [messages, setMessages] = useState<{id:number;role:string;text:string}[]>([
+  const [messages, setMessages] = useState<{id:number;role:string;text:string;sources?:any[];commands?:string[]}[]>([
     {id:0,role:"system",text:"Sistemi ausiliari inizializzati. Reattore ARC stabile. In attesa di comandi, Signore."}
   ]);
   const [feedbackSent, setFeedbackSent] = useState<Record<number,number>>({});
+  const [attachedFiles, setAttachedFiles] = useState<{name:string;content:string}[]>([]);
+  const [dragOver, setDragOver] = useState(false);
+  const [uploading, setUploading] = useState(false);
+  const [theme, setThemeState] = useState<"dark"|"light">("dark");
+  const [activeTab, setActiveTab] = useState<"reactor" | "markets" | "log">("reactor");
+  const [pendingActionId, setPendingActionId] = useState<string | null>(null);
+  const [pendingActionLabel, setPendingActionLabel] = useState<string>("");
+  const [confirming, setConfirming] = useState(false);
+  const [ctxMenu, setCtxMenu] = useState<{x:number;y:number;msg:{id:number;role:string;text:string}}|null>(null);
+  const [authToken, setAuthToken] = useState<string|null>(() => {
+    const t = localStorage.getItem("jwt_token");
+    return t && t !== "null" && t !== "undefined" ? t : null;
+  });
+  const [authUser, setAuthUser] = useState<string|null>(() => {
+    const u = localStorage.getItem("jwt_user");
+    return u && u !== "null" && u !== "undefined" ? u : null;
+  });
+  const [authMode, setAuthMode] = useState<"login"|"register">("login");
+  const [authForm, setAuthForm] = useState({username:"",password:""});
+  const [authError, setAuthError] = useState("");
+  const [showVectorViz, setShowVectorViz] = useState(false);
+  const [timeStr, setTimeStr] = useState(new Date().toLocaleTimeString('it-IT'));
+  const [ragThreshold, setRagThreshold] = useState(1.2);
+  useEffect(() => {
+    fetchWithAuth("/api/rag/threshold").then(r => r.ok && r.json()).then(d => { if (d?.threshold != null) setRagThreshold(d.threshold); }).catch(() => {});
+  }, []);
+  const updateRagThreshold = async (val: number) => {
+    setRagThreshold(val);
+    try { await fetchWithAuth("/api/rag/threshold", {method:"PUT", body:JSON.stringify({threshold:val})}); } catch {}
+  };
+  useEffect(() => { applyTheme(theme); }, [theme]);
+
+  useEffect(() => {
+    const handler = () => {
+      setAuthToken(null);
+      setAuthUser(null);
+    };
+    window.addEventListener("auth:expired", handler);
+    return () => window.removeEventListener("auth:expired", handler);
+  }, []);
+
+  useEffect(() => {
+    const t = localStorage.getItem("jwt_token");
+    const u = localStorage.getItem("jwt_user");
+    console.log("[AUTH] token:", t ? t.substring(0,20)+"..." : null, "user:", u);
+  }, []);
+  useEffect(() => {
+    const handler = (e: MouseEvent) => {
+      const el = e.target as HTMLElement;
+      if (el.closest("[data-debug-reset]")) {
+        localStorage.removeItem("jwt_token");
+        localStorage.removeItem("jwt_user");
+        window.location.reload();
+      }
+    };
+    document.addEventListener("click", handler, true);
+    return () => document.removeEventListener("click", handler, true);
+  }, []);
+  useEffect(() => { const id = setInterval(() => setTimeStr(new Date().toLocaleTimeString('it-IT')), 1000); return () => clearInterval(id); }, []);
   const msgIdRef = useRef(1);
   const chatEndRef = useRef<HTMLDivElement>(null!);
   const chatContainerRef = useRef<HTMLDivElement>(null!);
+  const fileInputRef = useRef<HTMLInputElement>(null!);
   const abortRef = useRef<AbortController | null>(null);
+
+  // ── Stato unificato vocale/testuale ──────────────────────────────────
+  const storeStatus = useStore((s) => s.status);
+  const storeVolume = useStore((s) => s.volume);
+  const setStoreStatus = useStore((s) => s.setStatus);
+  const setStoreVolume = useStore((s) => s.setVolume);
+  const setStoreConnected = useStore((s) => s.setConnected);
+  const [voiceEnabled, setVoiceEnabled] = useState(false);
+  const [textResponding, setTextResponding] = useState(false);
+  const listening = storeStatus === "listening";
+  const isResponding = textResponding || storeStatus === "processing" || storeStatus === "speaking";
+
+  // ── Hooks voce ───────────────────────────────────────────────────────
+  // Ref ponte: useAudioStream chiama sendAudio da useWebSocket senza creare dipendenze
+  const sendAudioRef = useRef<(data: ArrayBuffer) => void>(() => {});
+  const startRecRef = useRef<() => void>(() => {});
+  const stopRecRef = useRef<() => void>(() => {});
+
+  const handleWSMessage = useCallback((msg: WSMessage) => {
+    if (msg.type === "transcription") {
+      const uid = msgIdRef.current++;
+      setMessages((p) => [...p, { id: uid, role: "user", text: msg.text || "" }]);
+      setStoreStatus("processing");
+    } else if (msg.type === "response") {
+      const rid = msgIdRef.current++;
+      const m = msg as any;
+      setMessages((p) => [...p, { id: rid, role: "system", text: m.text || "", sources: m.sources }]);
+      setStoreStatus("speaking");
+    } else if (msg.type === "speaking_end") {
+      setStoreStatus("idle");
+    } else if (msg.type === "error") {
+      setStoreStatus("idle");
+    }
+  }, [setStoreStatus]);
+
+  const { sendAudio } = useWebSocket({
+    onMessage: handleWSMessage,
+    onAudioData: useCallback((blob: Blob) => {
+      const url = URL.createObjectURL(blob);
+      const audio = new Audio(url);
+      audio.onended = () => setStoreStatus("idle");
+      audio.play().catch(() => setStoreStatus("idle"));
+    }, [setStoreStatus]),
+    onStatusChange: useCallback((connected: boolean) => setStoreConnected(connected), [setStoreConnected]),
+  });
+  sendAudioRef.current = sendAudio;
+
+  const { startRecording, stopRecording } = useAudioStream({
+    onAudioData: useCallback((data: ArrayBuffer) => sendAudioRef.current(data), []),
+    onVolumeChange: useCallback((vol: number) => setStoreVolume(vol), [setStoreVolume]),
+  });
+  startRecRef.current = startRecording;
+  stopRecRef.current = stopRecording;
+
+  const handleWake = useCallback(() => {
+    setStoreStatus("listening");
+    startRecRef.current();
+  }, [setStoreStatus]);
+
+  const canWake = voiceEnabled && storeStatus === "idle" && !textResponding;
+  useWakeWord({ onWake: handleWake, enabled: canWake });
+
+  const toggleVoice = useCallback(() => {
+    setVoiceEnabled((v) => {
+      if (v) { stopRecRef.current(); setStoreStatus("idle"); }
+      return !v;
+    });
+  }, [setStoreStatus]);
+
+  const { activeSessionId, chatHistory, setChatHistory, addChatHistory } = useStore();
+
+  // Validate session existence (silent cleanup)
+  useEffect(() => {
+    if (activeSessionId) {
+      fetchWithAuth(`/api/chats/${activeSessionId}`).then(r => {
+        if (!r.ok) throw new Error(`HTTP ${r.status}`);
+      }).catch(() => {
+        setChatHistory([]);
+        localStorage.removeItem('activeSessionId');
+      });
+    }
+  }, [activeSessionId, setChatHistory]);
 
   const sendFeedback = async (msgId:number, rating:number, userMsg:string, assistantMsg:string) => {
     if (feedbackSent[msgId]) return;
     try {
-      await fetch(`${DOCKER_API}/api/feedback`, {
-        method:"POST", headers:{"Content-Type":"application/json"},
+      await fetchWithAuth(`/api/feedback`, {
+        method:"POST",
         body:JSON.stringify({message_id:String(msgId),user_message:userMsg,assistant_response:assistantMsg,rating,language:"it",intent:"chat"}),
       });
       setFeedbackSent(p => ({...p, [msgId]:rating}));
     } catch {}
   };
 
+  const exportChat = async (fmt: "txt" | "pdf") => {
+    const msgs = displayMessages.map(m => ({role: m.role, text: m.text}));
+    if (fmt === "txt") {
+      const txt = msgs.map(m => `${m.role === "user" ? "TU" : "J.A.R.V.I.S."}: ${m.text}`).join("\n\n---\n\n");
+      const blob = new Blob([txt], {type:"text/plain;charset=utf-8"});
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a"); a.href = url; a.download = `jarvis-${new Date().toISOString().slice(0,10)}.txt`; a.click();
+      URL.revokeObjectURL(url);
+    } else {
+      try {
+        const r = await fetchWithAuth(`/api/export/pdf`, {method:"POST", body:JSON.stringify({messages:msgs,format:"pdf"})});
+        if (!r.ok) throw new Error(`HTTP ${r.status}`);
+        const blob = await r.blob();
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement("a"); a.href = url; a.download = `jarvis-${new Date().toISOString().slice(0,10)}.pdf`; a.click();
+        URL.revokeObjectURL(url);
+      } catch (err) { console.error("PDF export fallito:", err); }
+    }
+  };
+
   const fetchMetrics = useCallback(async () => {
-    const d = await fetchFromBest([`${HOST_METRICS_URL}/api/system/metrics`, `${DOCKER_API}/api/system/metrics`]);
+    let d = await fetchFromBest([`${HOST_METRICS_URL}/api/system/metrics`], 2000);
+    if (!d) {
+      try { const r = await fetchWithAuth(`/api/system/metrics`); if (r.ok) d = await r.json(); } catch {}
+    }
     if (d) setMetrics(d as MetricSnapshot);
   }, []);
 
-  useEffect(() => { fetchMetrics(); const id = setInterval(fetchMetrics, 2000); return () => clearInterval(id); }, [fetchMetrics]);
+  useEffect(() => { fetchMetrics(); const id = setInterval(fetchMetrics, 5000); return () => clearInterval(id); }, [fetchMetrics]);
+
+  const uploadFile = async (file: File) => {
+    setUploading(true);
+    const fd = new FormData();
+    fd.append("file", file);
+    try {
+      const r = await fetchWithAuth(`/api/upload`, {method:"POST", body:fd});
+      if (!r.ok) throw new Error(`HTTP ${r.status}`);
+      const d = await r.json();
+      setAttachedFiles(p => [...p, {name:d.filename, content:d.content}]);
+    } catch (err) {
+      console.error("Upload fallito:", err);
+    } finally {
+      setUploading(false);
+    }
+  };
+
+  const handleFilePick = (e: React.ChangeEvent<HTMLInputElement>) => {
+    for (const f of e.target.files || []) uploadFile(f);
+    e.target.value = "";
+  };
+
+  const handleDrop = (e: React.DragEvent) => {
+    e.preventDefault();
+    setDragOver(false);
+    for (const f of e.dataTransfer.files) uploadFile(f);
+  };
+
+  const removeFile = (idx: number) => setAttachedFiles(p => p.filter((_,i) => i !== idx));
 
   const cpu = metrics?.cpu ?? 0;
   const ram = metrics?.ram ?? 0;
@@ -294,38 +264,145 @@ export default function JarvisDashboard() {
   const ramHist = metrics?.history?.ram ?? [];
   const tempHist = metrics?.history?.temp ?? [];
 
+  const handleConfirm = async (confirm: boolean) => {
+    if (!pendingActionId) return;
+    setConfirming(true);
+    try {
+      const r = await fetchWithAuth(`/api/confirm`, {
+        method:"POST",
+        body:JSON.stringify({action_id: pendingActionId, confirm}),
+      });
+      const d = await r.json();
+      const mid = msgIdRef.current++;
+      if (confirm && d.status === "ok") {
+        setMessages(p => [...p, {id:mid, role:"system", text: `✅ Azione eseguita: ${d.result}`}]);
+      } else if (!confirm || d.status === "cancelled") {
+        setMessages(p => [...p, {id:mid, role:"system", text: `❌ Azione annullata.`}]);
+      } else {
+        setMessages(p => [...p, {id:mid, role:"system", text: `⚠️ Errore: ${d.message}`}]);
+      }
+    } catch (err) {
+      const mid = msgIdRef.current++;
+      setMessages(p => [...p, {id:mid, role:"system", text: `⚠️ Errore conferma: ${(err as Error)?.message}`}]);
+    }
+    setPendingActionId(null);
+    setPendingActionLabel("");
+    setConfirming(false);
+  };
+
   const handleStop = () => {
     if (abortRef.current) {
       abortRef.current.abort();
       abortRef.current = null;
     }
-    setIsResponding(false);
+    setTextResponding(false);
+    if (storeStatus === "speaking" || storeStatus === "processing") {
+      setStoreStatus("idle");
+    }
+  };
+
+  const handleAuth = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setAuthError("");
+    try {
+      const r = await fetch(`/api/auth/${authMode}`, {method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify(authForm)});
+      const d = await r.json();
+      if (!r.ok) { setAuthError(d.detail || "Auth failed"); return; }
+      localStorage.setItem("jwt_token", d.access_token);
+      localStorage.setItem("jwt_user", d.username);
+      setAuthToken(d.access_token);
+      setAuthUser(d.username);
+    } catch (err) { setAuthError("Connection error"); }
+  };
+
+  const handleLogout = () => {
+    localStorage.removeItem("jwt_token");
+    localStorage.removeItem("jwt_user");
+    setAuthToken(null);
+    setAuthUser(null);
+  };
+
+  const handleKeyDown = (e: React.KeyboardEvent) => {
+    if (e.key === "Escape" && isResponding) {
+      e.preventDefault();
+      handleStop();
+    }
+    if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) {
+      e.preventDefault();
+      const form = (e.target as HTMLElement).closest("form");
+      form?.requestSubmit();
+    }
   };
 
   const handleSubmit = async (e: FormEvent) => {
     e.preventDefault();
-    if (!chatInput.trim() || isResponding) return;
-    const userMsg = chatInput.trim();
+    const hasContent = chatInput.trim() || attachedFiles.length > 0;
+    if (!hasContent || isResponding) return;
+    const userMsg = chatInput.trim() + (attachedFiles.length > 0 ? `\n\n[File allegati: ${attachedFiles.map(f=>f.name).join(", ")}]` : "");
+    const fileContent = attachedFiles.length > 0 ? attachedFiles.map(f => `=== ${f.name} ===\n${f.content}`).join("\n\n") : "";
     const uid = msgIdRef.current++;
     setMessages(p => [...p, {id:uid,role:"user",text:userMsg}]);
     setChatInput("");
-    setIsResponding(true);
+    setAttachedFiles([]);
+    setTextResponding(true);
+
+    let sid = 0;
+    let sessionIdReturned: number | null = null;
 
     const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), 120000);
+    const timeout = setTimeout(() => controller.abort(), 600000);
     abortRef.current = controller;
     try {
-      const r = await fetch(`${DOCKER_API}/api/chat`, {
-        method:"POST", headers:{"Content-Type":"application/json"},
-        body:JSON.stringify({text:userMsg}),
+      const r = await fetchWithAuth(`/api/chat`, {
+        method:"POST",
+        body:JSON.stringify({text:userMsg, file_content: fileContent, session_id: activeSessionId ?? undefined, stream: true}),
         signal: controller.signal,
       });
       clearTimeout(timeout);
       abortRef.current = null;
       if (!r.ok) throw new Error(`HTTP ${r.status}`);
-      const d = await r.json();
-      const sid = msgIdRef.current++;
-      setMessages(p => [...p, {id:sid,role:"system",text:d.response || d.detail || "OK"}]);
+
+      const reader = r.body?.getReader();
+      if (!reader) { setTextResponding(false); return; }
+      const decoder = new TextDecoder();
+      let buffer = "";
+      let responseText = "";
+
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        buffer += decoder.decode(value, { stream: true });
+        const lines = buffer.split("\n");
+        buffer = lines.pop() || "";
+        for (const line of lines) {
+          if (!line.startsWith("data: ")) continue;
+          const data = line.slice(6);
+          try {
+            const ev = JSON.parse(data);
+            if (ev.type === "token") {
+              responseText += ev.text;
+              if (sid === 0) { sid = msgIdRef.current++; setMessages(p => [...p, {id:sid,role:"system",text:""}]); }
+              setMessages(p => p.map(m => m.id === sid ? {...m, text: responseText} : m));
+            } else if (ev.type === "done") {
+              responseText = ev.response;
+              if (sid === 0) { sid = msgIdRef.current++; }
+              setMessages(p => p.map(m => m.id === sid ? {...m, text: responseText, sources: ev.sources || []} : m));
+              sessionIdReturned = ev.session_id;
+              if (ev.pending_action) {
+                setPendingActionId(ev.pending_action);
+                setPendingActionLabel("azione sistema");
+              }
+            }
+          } catch {}
+        }
+      }
+
+      if (sessionIdReturned && !activeSessionId) {
+        useStore.getState().setActiveSessionId(sessionIdReturned);
+        const sr = await fetchWithAuth(`${API_URL}/chats`);
+        const sj = await sr.json();
+        if (sj.sessions) { useStore.getState().setSessions(sj.sessions); }
+      }
     } catch (err) {
       const aborted = (err as Error)?.name === "AbortError";
       clearTimeout(timeout);
@@ -334,94 +411,188 @@ export default function JarvisDashboard() {
       if (aborted) {
         setMessages(p => [...p, {id:eid,role:"system",text:"Richiesta interrotta."}]);
       } else {
-        setMessages(p => [...p, {id:eid,role:"system",text:`Errore di connessione al server. Verifica che il backend sia in esecuzione.`}]);
+        setMessages(p => [...p, {id:eid,role:"system",text:"Errore di connessione al server. Verifica che il backend sia in esecuzione."}]);
       }
     }
-    setIsResponding(false);
+    setTextResponding(false);
   };
 
-  useEffect(() => { chatEndRef.current?.scrollIntoView({behavior:"smooth"}); }, [messages]);
+  useEffect(() => {
+    // Smart scroll: only if user is near bottom (within 100px)
+    const container = chatContainerRef.current;
+    if (container) {
+      const isNearBottom = container.scrollHeight - container.scrollTop - container.clientHeight < 100;
+      if (isNearBottom) {
+        chatEndRef.current?.scrollIntoView({ behavior: "smooth" });
+      }
+    } else {
+      // Fallback if container ref not set yet
+      chatEndRef.current?.scrollIntoView({ behavior: "smooth" });
+    }
+  }, [messages]);
+
+  useEffect(() => { if (!ctxMenu) return; const close = () => setCtxMenu(null); window.addEventListener("click", close); return () => window.removeEventListener("click", close); }, [ctxMenu]);
+
+  const copyToClipboard = async (text: string) => { try { await navigator.clipboard.writeText(text); } catch {} };
+
+  const displayMessages = activeSessionId && chatHistory.length > 0
+    ? [{id:0,role:"system",text:"Sistemi ausiliari inizializzati."}, ...chatHistory.map((m,i) => ({id:i+1,role:m.role,text:m.content}))]
+    : messages;
 
   return (
-    <div style={{background:C.bg,height:"100vh",width:"100vw",overflow:"hidden",fontFamily:mono,color:C.text,position:"relative",display:"flex",flexDirection:"column",padding:"10px 16px",boxSizing:"border-box"}}>
-      <Scanlines />
+    <div style={{background:C.bg,height:"100vh",width:"100vw",overflow:"hidden",fontFamily:font,color:C.text,position:"relative",display:"flex",flexDirection:"column",boxSizing:"border-box"}}>
+      <Scanlines theme={theme} />
 
-      {/* HEADER */}
-      <div style={{flexShrink:0,display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:8,paddingBottom:6,borderBottom:`1px solid ${C.border}`}}>
-        <div>
-          <div style={{fontSize:16,letterSpacing:"0.3em",color:C.cyan,fontWeight:"bold"}}>J.A.R.V.I.S</div>
-          <div style={{fontSize:9,letterSpacing:"0.2em",color:C.textFaint}}>MARK VII INTERFACE INTEGRATION</div>
+
+
+      {/* ── Ologramma compatto nella toolbar ── */}
+      {voiceEnabled && (
+        <div style={{position:"fixed",top:50,right:14,zIndex:200,width:80,height:80,pointerEvents:"none"}}>
+          <Canvas camera={{position:[0,0,6],fov:50}}>
+            <HolographicDisplay />
+          </Canvas>
         </div>
-        <div style={{fontSize:13,color:C.cyan,letterSpacing:"0.1em"}}>{new Date().toLocaleTimeString('it-IT')}</div>
+      )}
+
+      {/* ── VoiceVisualizer overlay nel tab reattore ── */}
+      {(storeStatus === "listening" || storeStatus === "speaking") && (
+        <div style={{position:"fixed",bottom:100,left:"50%",transform:"translateX(-50%)",width:"60%",maxWidth:500,height:80,zIndex:150,pointerEvents:"none"}}>
+          <Canvas camera={{position:[0,0,5],fov:50}}>
+            <VoiceVisualizer />
+          </Canvas>
+        </div>
+      )}
+
+      <div style={{flexShrink:0,display:"flex",alignItems:"center",gap:10,padding:"6px 14px",borderBottom:`1px solid ${C.border}`,background:C.bgPanel}}>
+        <div style={{flexShrink:0,marginRight:4,display:"flex",alignItems:"center",gap:6}}>
+          <span style={{fontSize:15,letterSpacing:"0.3em",color:C.cyan,fontWeight:"bold",fontFamily:mono}}>J.A.R.V.I.S</span>
+          {voiceEnabled && (
+            <span style={{
+              fontSize:9,fontFamily:mono,letterSpacing:"0.1em",
+              color: listening ? C.green : storeStatus === "processing" ? C.amber : C.cyan,
+              background: (listening||storeStatus!=="idle") ? `${C.cyan}15` : "transparent",
+              padding:"1px 6px",borderRadius:3,border:`1px solid ${listening?C.green:storeStatus!=="idle"?C.cyan:"transparent"}`,
+              transition:"all 0.3s",
+            }}>
+              {listening ? "ASCOLTO" : storeStatus === "processing" ? "ELABORAZIONE" : storeStatus === "speaking" ? "VOCE" : "VOCALE"}
+            </span>
+          )}
+        </div>
+        <MetricBadge label="CPU" value={Math.round(cpu)} unit="%" color={C.cyan} history={cpuHist} />
+        <MetricBadge label="RAM" value={Math.round(ram)} unit="%" color={C.green} history={ramHist} />
+        <MetricBadge label="TEMP" value={temp ? Math.round(temp) : "—"} unit="°C" color={C.amber} history={tempHist} />
+        <MetricBadge label="DISK" value={Math.round(disk)} unit="%" color={C.text} />
+        <div style={{flex:1,minWidth:0,display:"flex",alignItems:"center",paddingLeft:8}}>
+          <SystemLog compact />
+        </div>
+        <div style={{fontFamily:mono,fontSize:13,color:C.textFaint,flexShrink:0,display:"flex",alignItems:"center",gap:10}}>
+          <span onClick={()=>setThemeState(t=>t==="dark"?"light":"dark")}
+            style={{cursor:"pointer",fontSize:16,color:C.amber,transition:"transform 0.2s"}}
+            title="Cambia tema">{theme==="dark"?"☀️":"🌙"}</span>
+          <span onClick={()=>exportChat("txt")}
+            style={{cursor:"pointer",fontSize:14,color:C.textDim}}
+            title="Esporta come TXT">📄</span>
+          <span onClick={()=>exportChat("pdf")}
+            style={{cursor:"pointer",fontSize:14,color:C.textDim}}
+            title="Esporta come PDF">📕</span>
+          <span onClick={()=>setShowVectorViz(true)}
+            style={{cursor:"pointer",fontSize:13,color:C.textDim}}
+            title="Visualizzazione vettori">📊</span>
+          <label style={{display:"flex",alignItems:"center",gap:4,fontSize:11,cursor:"pointer",color:C.textFaint}} title="Soglia similarità RAG">
+            RAG
+            <input type="range" min="0.1" max="3.0" step="0.1" value={ragThreshold}
+              onChange={e=>updateRagThreshold(parseFloat(e.target.value))}
+              style={{width:60,height:4,accentColor:C.cyan,verticalAlign:"middle",cursor:"pointer"}} />
+            <span style={{minWidth:28,textAlign:"right",fontFamily:mono}}>{ragThreshold.toFixed(1)}</span>
+          </label>
+          {authUser && <span style={{fontSize:11,color:C.green,fontFamily:mono}}>{authUser}</span>}
+          {authUser && <span onClick={handleLogout} style={{cursor:"pointer",fontSize:13,color:C.textFaint}} title="Logout">🚪</span>}
+          <span data-debug-reset="1" onClick={()=>{localStorage.removeItem("jwt_token");localStorage.removeItem("jwt_user");setAuthToken(null);setAuthUser(null);}} style={{cursor:"pointer",fontSize:11,color:C.amber,border:`1px solid ${C.amber}30`,padding:"2px 6px",borderRadius:3,fontFamily:mono,position:"relative",zIndex:9999}} title="Reset autenticazione forzato">🔓 Reset</span>
+          {timeStr}
+        </div>
       </div>
 
-      {/* MAIN GRID */}
-      <div style={{flex:1,display:"grid",gridTemplateColumns:"260px 1fr 240px",gap:12,minHeight:0}}>
-        
-        {/* LEFT: Charts + Logs */}
-        <div style={{display:"flex",flexDirection:"column",gap:10,minHeight:0}}>
-          <Panel title="CPU" accent={C.cyan}>
-            <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:2}}>
-              <div style={{fontSize:22,color:C.cyan,fontWeight:"bold"}}>{Math.round(cpu)}<span style={{fontSize:11,color:C.textDim}}>%</span></div>
-              <div style={{flex:1,height:4,background:"rgba(0,229,255,0.1)",borderRadius:2}}>
-                <div style={{width:`${Math.min(cpu,100)}%`,height:"100%",background:C.cyan,borderRadius:2}} />
-              </div>
-            </div>
-            <LineChart data={cpuHist} color={C.cyan} max={100} label="%" />
-          </Panel>
-          <Panel title="RAM" accent={C.green}>
-            <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:2}}>
-              <div style={{fontSize:22,color:C.green,fontWeight:"bold"}}>{Math.round(ram)}<span style={{fontSize:11,color:C.textDim}}>%</span></div>
-              <div style={{flex:1,height:4,background:"rgba(0,255,136,0.1)",borderRadius:2}}>
-                <div style={{width:`${Math.min(ram,100)}%`,height:"100%",background:C.green,borderRadius:2}} />
-              </div>
-              {metrics && <div style={{fontSize:9,color:C.textFaint}}>{metrics.ram_gb}/{metrics.ram_total_gb}GB</div>}
-            </div>
-            <LineChart data={ramHist} color={C.green} max={100} label="%" />
-          </Panel>
-          <Panel title="Temperatura" accent={C.amber}>
-            <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:2}}>
-              <div style={{fontSize:22,color:C.amber,fontWeight:"bold"}}>{temp ? Math.round(temp) : "—"}<span style={{fontSize:11,color:C.textDim}}>°C</span></div>
-              <div style={{flex:1,height:4,background:"rgba(255,170,0,0.1)",borderRadius:2}}>
-                <div style={{width:`${Math.min(temp?temp/100*100:0,100)}%`,height:"100%",background:C.amber,borderRadius:2}} />
-              </div>
-            </div>
-            <LineChart data={tempHist} color={C.amber} max={100} label="°C" />
-          </Panel>
-          <div style={{flex:1,minHeight:0}}>
-            <Panel title="System Log" style={{height:"100%"}}>
-              <SystemLog />
-            </Panel>
-          </div>
+      <div style={{flex:1,display:"grid",gridTemplateColumns:"240px 1fr",gap:0,minHeight:0}}>
+        <div style={{overflow:"hidden",borderRight:`1px solid ${C.border}`}}>
+          <Sidebar />
         </div>
 
-        {/* CENTER: Reactor + Chat */}
-        <div style={{display:"flex",flexDirection:"column",gap:10,minHeight:0}}>
-          <div style={{flex:1,background:"rgba(0,0,0,0.15)",borderRadius:4,border:`1px solid ${C.cyanFaint}`,overflow:"hidden",position:"relative"}}>
-            <div style={{position:"absolute",inset:0,display:"flex",flexDirection:"column",zIndex:1}}>
-              <div style={{flex:1}} />
-              {messages.length > 1 && (
-                <div ref={chatContainerRef} style={{maxHeight:"55%",overflowY:"auto",padding:"6px 10px",display:"flex",flexDirection:"column",gap:6}}>
-                  {messages.slice(1).map((msg,i,arr) => {
+        <div style={{display:"flex",flexDirection:"column",minHeight:0,padding:"8px 10px",gap:6}}>
+          <div style={{flexShrink:0,display:"flex",gap:2}}>
+            {([["reactor","⚛ Reattore"],["markets","📈 Mercati"],["log","📋 Log"]] as const).map(([key,label]) => (
+              <button key={key} onClick={()=>setActiveTab(key)}
+                style={{fontSize:13,fontFamily:mono,background:activeTab===key?C.cyanFaint:"transparent",border:`1px solid ${activeTab===key?C.cyan:C.border}`,color:activeTab===key?C.cyan:C.textDim,borderRadius:"3px 3px 0 0",padding:"5px 16px",cursor:"pointer",borderBottom:activeTab===key?`1px solid ${C.bgPanel}`:"none",marginBottom:-1}}>{label}</button>
+            ))}
+          </div>
+
+          {/* ── REATTORE: reactor + chat ── */}
+          <div style={{flex:1,display:activeTab==="reactor"?"flex":"none",flexDirection:"column",minHeight:0,gap:6}}>
+              {displayMessages.length > 1 ? (
+                <div style={{flexShrink:0,width:80,height:80,marginLeft:"auto"}}>
+                  <ErrorBoundary fallback={<div style={{width:80,height:80,display:"flex",alignItems:"center",justifyContent:"center",color:C.textDim,fontFamily:mono,fontSize:9}}>3D</div>}>
+                    <ArcReactor3D isResponding={isResponding} />
+                  </ErrorBoundary>
+                </div>
+              ) : (
+                <div style={{flex:1,background:"rgba(0,0,0,0.2)",borderRadius:4,border:`1px solid ${C.cyanFaint}`,overflow:"hidden",position:"relative",minHeight:120}}>
+                  <ErrorBoundary fallback={<div style={{padding:20,color:C.textDim,fontFamily:mono,fontSize:12}}>3D non disponibile</div>}>
+                    <ArcReactor3D isResponding={isResponding} />
+                  </ErrorBoundary>
+                </div>
+              )}
+
+              {displayMessages.length > 1 && (
+                <>
+                <div ref={chatContainerRef}
+                  onDragOver={e=>{e.preventDefault();setDragOver(true);}}
+                  onDragLeave={()=>setDragOver(false)}
+                  onDrop={handleDrop}
+                  style={{flex:1,overflowY:"auto",display:"flex",flexDirection:"column",gap:4,padding:"6px 8px",background:dragOver?"rgba(0,229,255,0.08)":"rgba(0,0,0,0.15)",borderRadius:4,border:`1px solid ${dragOver?C.cyan:C.cyanFaint}`,transition:"background 0.15s, border-color 0.15s"}}>
+                  {isResponding && displayMessages.filter(m=>m.role==="system").every(m => m.text) && (
+                    <div style={{alignSelf:"flex-start",background:"rgba(0,255,136,0.03)",borderLeft:`2px solid ${C.green}`,padding:"5px 10px",borderRadius:4,fontSize:13,color:C.textDim,fontFamily:mono,display:"flex",alignItems:"center",gap:6}}>
+                      <span style={{fontSize:14,animation:"blink 1.2s ease-in-out infinite"}}>●</span> J.A.R.V.I.S. sta pensando...
+                    </div>
+                  )}
+                  {displayMessages.slice(1).map((msg,i,arr) => {
                     const prevUser = msg.role==="system" ? arr.slice(0,i).reverse().find(m => m.role==="user") : null;
                     return (
-                    <div key={msg.id} style={{
+                    <div key={msg.id} onContextMenu={e => { e.preventDefault(); setCtxMenu({x:e.clientX,y:e.clientY,msg}); }}
+                      style={{
                       alignSelf: msg.role==="user" ? "flex-end" : "flex-start",
                       background: msg.role==="user" ? C.cyanFaint : "rgba(0,255,136,0.05)",
                       borderLeft: msg.role==="system" ? `2px solid ${C.green}` : "none",
                       borderRight: msg.role==="user" ? `2px solid ${C.cyan}` : "none",
-                      padding:"5px 8px",borderRadius:4,maxWidth:"90%",fontSize:10,lineHeight:1.4,position:"relative",
+                      padding:"5px 10px",borderRadius:4,maxWidth:"85%",fontSize:14,lineHeight:1.5,position:"relative",cursor:"context-menu",
                     }}>
-                      <span style={{fontSize:8,color:msg.role==="user"?C.cyan:C.green,display:"block",marginBottom:1}}>
+                      <span style={{fontSize:10,color:msg.role==="user"?C.cyan:C.green,display:"block",marginBottom:1,fontFamily:mono,letterSpacing:"0.05em"}}>
                         {msg.role==="user" ? "TU" : "J.A.R.V.I.S."}
                       </span>
-                      {msg.text}
+                      {msg.role === "system" ? (
+                        isResponding && i === arr.length - 1 ? (
+                          <span><TypewriterText text={msg.text} speed={8} /></span>
+                        ) : (
+                          <MarkdownRenderer content={msg.text} />
+                        )
+                      ) : msg.text}
                       {msg.role==="system" && prevUser && (
                         <div style={{display:"flex",gap:4,marginTop:4}}>
-                          <span onClick={() => sendFeedback(msg.id,2,prevUser.text,msg.text)}
-                            style={{cursor:"pointer",fontSize:11,color:feedbackSent[msg.id]===2?C.green:C.textFaint,opacity:0.6}}>▲</span>
-                          <span onClick={() => sendFeedback(msg.id,1,prevUser.text,msg.text)}
-                            style={{cursor:"pointer",fontSize:11,color:feedbackSent[msg.id]===1?C.red:C.textFaint,opacity:0.6}}>▼</span>
+                          <span onClick={() => !feedbackSent[msg.id] && sendFeedback(msg.id,2,prevUser.text,msg.text)}
+                            style={{cursor:feedbackSent[msg.id]?"default":"pointer",fontSize:14,color:feedbackSent[msg.id]===2?C.green:C.textFaint,opacity:feedbackSent[msg.id]?0.4:0.6,transition:"all 0.3s"}}>
+                            {feedbackSent[msg.id]===2?"✓":feedbackSent[msg.id]?"":"▲"}
+                          </span>
+                          <span onClick={() => !feedbackSent[msg.id] && sendFeedback(msg.id,1,prevUser.text,msg.text)}
+                            style={{cursor:feedbackSent[msg.id]?"default":"pointer",fontSize:14,color:feedbackSent[msg.id]===1?C.red:C.textFaint,opacity:feedbackSent[msg.id]?0.4:0.6,transition:"all 0.3s"}}>
+                            {feedbackSent[msg.id]===1?"✓":feedbackSent[msg.id]?"":"▼"}
+                          </span>
+                        </div>
+                      )}
+                      {(msg as any).sources?.length > 0 && (
+                        <div style={{marginTop:4,display:"flex",gap:6,flexWrap:"wrap"}}>
+                          {(msg as any).sources.map((s:any,i:number) => (
+                            <a key={i} href={s.url} target="_blank" rel="noopener noreferrer"
+                              style={{fontSize:11,fontFamily:"'JetBrains Mono','Consolas',monospace",color:"#00e5ff",textDecoration:"none",border:"1px solid rgba(0,229,255,0.25)",borderRadius:3,padding:"1px 6px",opacity:0.7}}
+                              title={s.url}>📰 {s.title}</a>
+                          ))}
                         </div>
                       )}
                     </div>
@@ -429,70 +600,124 @@ export default function JarvisDashboard() {
                   })}
                   <div ref={chatEndRef} />
                 </div>
+
+                {(attachedFiles.length > 0 || uploading) && (
+                  <div style={{flexShrink:0,display:"flex",gap:6,flexWrap:"wrap"}}>
+                    {attachedFiles.map((f,i) => (
+                      <span key={i} style={{fontSize:13,fontFamily:mono,background:"rgba(0,229,255,0.12)",border:`1px solid ${C.cyan}`,borderRadius:4,padding:"3px 10px",display:"flex",alignItems:"center",gap:6,color:C.cyan,boxShadow:"0 0 8px rgba(0,229,255,0.12)"}}>
+                        <span style={{fontSize:15}}>📎</span> {f.name}
+                        <span onClick={()=>removeFile(i)} style={{cursor:"pointer",color:C.red,fontSize:16,lineHeight:"14px",fontWeight:"bold",marginLeft:2,opacity:0.8}} title="Rimuovi">×</span>
+                      </span>
+                    ))}
+                    {uploading && (
+                      <span style={{fontSize:13,fontFamily:mono,background:"rgba(0,229,255,0.08)",border:`1px solid ${C.cyanFaint}`,borderRadius:4,padding:"3px 10px",display:"flex",alignItems:"center",gap:6,color:C.textDim}}>
+                        <span style={{fontSize:15,animation:"spin 0.8s linear infinite",display:"inline-block"}}>⟳</span> Caricamento...
+                      </span>
+                    )}
+                  </div>
+                )}
+                </>
               )}
-            </div>
-            <ArcReactor3D isResponding={isResponding} />
-          </div>
 
-          {/* Controls */}
-          <div style={{flexShrink:0,display:"flex",flexDirection:"column",gap:6,padding:"0 8px"}}>
-            <div style={{display:"flex",gap:10,alignItems:"center"}}>
-              <button onClick={()=>setListening(!listening)} style={{width:36,height:36,borderRadius:"50%",background:listening?C.cyanFaint:"transparent",border:`1px solid ${listening?C.cyan:C.border}`,color:listening?C.cyan:C.textDim,cursor:"pointer",display:"flex",alignItems:"center",justifyContent:"center",flexShrink:0,fontSize:12}}>
-                {listening ? "●" : "🎤"}
-              </button>
-              <div style={{flex:1,background:C.bgPanel,border:`1px solid ${C.border}`,borderRadius:18,padding:"0 12px",height:36,display:"flex",alignItems:"center"}}>
-                <Waveform active={listening||isResponding} color={isResponding?C.green:C.cyan} />
+              <div style={{flexShrink:0,display:"flex",gap:8,alignItems:"center"}}>
+                <button onClick={toggleVoice} style={{width:36,height:36,borderRadius:"50%",background:voiceEnabled?C.cyanFaint:"transparent",border:`1px solid ${voiceEnabled?C.cyan:C.border}`,color:voiceEnabled?C.cyan:C.textDim,cursor:"pointer",display:"flex",alignItems:"center",justifyContent:"center",flexShrink:0,fontSize:14,position:"relative"}}>
+                  {voiceEnabled ? (listening ? "●" : "◉") : "🎤"}
+                  {voiceEnabled && !listening && storeStatus === "idle" && (
+                    <span style={{position:"absolute",top:-2,right:-2,width:8,height:8,borderRadius:"50%",background:C.green,opacity:0.8}} />
+                  )}
+                </button>
+                <div style={{flex:1,background:C.bgPanel,border:`1px solid ${C.border}`,borderRadius:16,padding:"0 12px",height:32,display:"flex",alignItems:"center"}}>
+                  <Waveform active={voiceEnabled||isResponding} color={isResponding?C.green:voiceEnabled?C.cyan:C.textDim} />
+                </div>
               </div>
-            </div>
 
-            <form onSubmit={handleSubmit} style={{display:"flex",justifyContent:"center",padding:"0 10%"}}>
-              <div style={{display:"flex",gap:8,width:"100%",maxWidth:500}}>
+              <form onSubmit={handleSubmit} style={{flexShrink:0,display:"flex",gap:6,alignItems:"center"}}>
+                <input type="file" ref={fileInputRef} onChange={handleFilePick} style={{display:"none"}} multiple />
+                <button type="button" onClick={()=>fileInputRef.current?.click()}
+                  style={{width:40,height:40,flexShrink:0,background:"rgba(0,229,255,0.08)",border:`1px solid ${C.cyan}`,color:C.cyan,cursor:"pointer",borderRadius:4,display:"flex",alignItems:"center",justifyContent:"center",fontSize:20,boxShadow:"0 0 6px rgba(0,229,255,0.15)",transition:"background 0.15s"}}
+                  title="Allega file (docx, xlsx, pdf, codice...)"
+                  onMouseEnter={e=>(e.currentTarget.style.background="rgba(0,229,255,0.18)")}
+                  onMouseLeave={e=>(e.currentTarget.style.background="rgba(0,229,255,0.08)")}
+                >📎</button>
                 <input type="text" value={chatInput} onChange={e=>setChatInput(e.target.value)}
-                  placeholder="Invia una direttiva testuale a J.A.R.V.I.S..."
+                  onKeyDown={handleKeyDown}
+                  placeholder="Invia una direttiva testuale a J.A.R.V.I.S... (Ctrl+Enter per inviare, Esc per stop)"
                   disabled={isResponding}
-                  style={{flex:1,background:"rgba(0,0,0,0.25)",border:`1px solid ${C.border}`,color:C.text,fontFamily:mono,fontSize:12,padding:"8px 12px",outline:"none",borderRadius:4}}
+                  style={{flex:1,background:"rgba(0,0,0,0.25)",border:`1px solid ${C.border}`,color:C.text,fontFamily:font,fontSize:15,padding:"9px 14px",outline:"none",borderRadius:4}}
                 />
                 {isResponding ? (
                   <button type="button" onClick={handleStop}
-                    style={{background:"rgba(255,68,85,0.15)",border:`1px solid ${C.red}`,color:C.red,fontFamily:mono,fontSize:11,padding:"0 16px",cursor:"pointer",borderRadius:4}}
-                  >
-                    ⏹ STOP
-                  </button>
+                    style={{background:"rgba(255,68,85,0.15)",border:`1px solid ${C.red}`,color:C.red,fontFamily:mono,fontSize:13,padding:"0 16px",height:38,cursor:"pointer",borderRadius:4}}
+                  >⏹ STOP</button>
                 ) : (
-                  <button type="submit" disabled={!chatInput.trim()}
-                    style={{background:"rgba(0,229,255,0.1)",border:`1px solid ${C.cyan}`,color:C.cyan,fontFamily:mono,fontSize:11,padding:"0 16px",cursor:"pointer",borderRadius:4}}
-                  >
-                    EXEC
-                  </button>
+                  <button type="submit" disabled={!chatInput.trim() && attachedFiles.length === 0}
+                    style={{background:"rgba(0,229,255,0.1)",border:`1px solid ${C.cyan}`,color:C.cyan,fontFamily:mono,fontSize:13,padding:"0 16px",height:38,cursor:"pointer",borderRadius:4}}
+                  >EXEC</button>
                 )}
-              </div>
-            </form>
+              </form>
+            </div>
+
+          {/* ── MERCATI: solo mercati ── */}
+          <div style={{display:activeTab==="markets"?"flex":"none",flex:1,background:"rgba(0,0,0,0.2)",borderRadius:4,border:`1px solid ${C.cyanFaint}`,overflow:"hidden",minHeight:120}}>
+              <MarketPanel />
+            </div>
+
+          {/* ── LOG: solo log ── */}
+          <div style={{display:activeTab==="log"?"block":"none",flex:1,background:"rgba(0,0,0,0.15)",borderRadius:4,border:`1px solid ${C.cyanFaint}`,overflow:"auto",padding:"4px 8px",minHeight:120}}>
+              <SystemLog />
+            </div>
+        </div>
+      </div>
+
+      {/* ── Auth Modal ── */}
+      {!authToken && (
+        <div style={{position:"fixed",inset:0,zIndex:9998,background:"#0a1e30",display:"flex",alignItems:"center",justifyContent:"center"}}>
+          <form onSubmit={handleAuth} style={{background:"#0f2a40",border:"1px solid rgba(0,229,255,0.35)",borderRadius:8,padding:"30px 40px",width:360,boxShadow:"0 0 60px rgba(0,229,255,0.15)"}}>
+            <div style={{textAlign:"center",marginBottom:6,fontFamily:mono,fontSize:12,letterSpacing:"0.2em",color:C.textFaint}}>AUTENTICAZIONE RICHIESTA</div>
+            <div style={{textAlign:"center",marginBottom:20,fontFamily:mono,fontSize:22,letterSpacing:"0.3em",color:C.cyan,fontWeight:"bold"}}>J.A.R.V.I.S.</div>
+            <div style={{display:"flex",gap:0,marginBottom:16}}>
+              <button type="button" onClick={()=>setAuthMode("login")} style={{flex:1,padding:"6px 0",background:authMode==="login"?C.cyanFaint:"transparent",border:`1px solid ${authMode==="login"?C.cyan:"transparent"}`,color:authMode==="login"?C.cyan:C.textDim,borderRadius:"4px 0 0 4px",cursor:"pointer",fontSize:13}}>Accedi</button>
+              <button type="button" onClick={()=>setAuthMode("register")} style={{flex:1,padding:"6px 0",background:authMode==="register"?C.cyanFaint:"transparent",border:`1px solid ${authMode==="register"?C.cyan:"transparent"}`,color:authMode==="register"?C.cyan:C.textDim,borderRadius:"0 4px 4px 0",cursor:"pointer",fontSize:13}}>Registrati</button>
+            </div>
+            <input type="text" placeholder="Username" value={authForm.username} onChange={e=>setAuthForm(p=>({...p,username:e.target.value}))}
+              style={{width:"100%",padding:"8px 10px",marginBottom:8,background:"rgba(0,0,0,0.3)",border:"1px solid rgba(0,229,255,0.2)",borderRadius:4,color:C.text,fontSize:14,outline:"none"}} />
+            <input type="password" placeholder="Password" value={authForm.password} onChange={e=>setAuthForm(p=>({...p,password:e.target.value}))}
+              style={{width:"100%",padding:"8px 10px",marginBottom:12,background:"rgba(0,0,0,0.3)",border:"1px solid rgba(0,229,255,0.2)",borderRadius:4,color:C.text,fontSize:14,outline:"none"}} />
+            {authError && <div style={{color:C.red,fontSize:12,marginBottom:8,fontFamily:mono}}>⚠ {authError}</div>}
+            <button type="submit" style={{width:"100%",padding:"9px 0",background:C.cyanFaint,border:`1px solid ${C.cyan}40`,borderRadius:4,color:C.cyan,cursor:"pointer",fontSize:14,fontFamily:mono,fontWeight:"bold",letterSpacing:"0.1em"}}>
+              {authMode === "login" ? "► ACCEDI" : "► REGISTRATI"}
+            </button>
+          </form>
+        </div>
+      )}
+
+      {pendingActionId && (
+        <ConfirmModal
+          pendingActionLabel={pendingActionLabel}
+          confirming={confirming}
+          onConfirm={handleConfirm}
+        />
+      )}
+
+      {ctxMenu && (
+        <div style={{position:"fixed",top:0,left:0,right:0,bottom:0,zIndex:9999}} onClick={()=>setCtxMenu(null)}>
+          <div style={{position:"absolute",top:ctxMenu.y,left:ctxMenu.x,background:"#111",border:"1px solid #333",borderRadius:6,boxShadow:"0 4px 20px rgba(0,0,0,0.6)",padding:"4px 0",minWidth:160,zIndex:10000,fontSize:13,fontFamily:mono}}
+            onClick={e=>e.stopPropagation()}>
+            <div onClick={()=>{copyToClipboard(ctxMenu.msg.text);setCtxMenu(null);}}
+              style={{padding:"6px 14px",cursor:"pointer",color:"#ccc",display:"flex",alignItems:"center",gap:8}}
+              onMouseEnter={e=>e.currentTarget.style.background="#222"} onMouseLeave={e=>e.currentTarget.style.background="transparent"}>
+              📋 Copia testo
+            </div>
+            <div onClick={()=>{copyToClipboard(ctxMenu.msg.text);const blob=new Blob([ctxMenu.msg.text],{type:"text/plain;charset=utf-8"});const url=URL.createObjectURL(blob);const a=document.createElement("a");a.href=url;a.download=`messaggio-${ctxMenu.msg.id}.txt`;a.click();URL.revokeObjectURL(url);setCtxMenu(null);}}
+              style={{padding:"6px 14px",cursor:"pointer",color:"#ccc",display:"flex",alignItems:"center",gap:8}}
+              onMouseEnter={e=>e.currentTarget.style.background="#222"} onMouseLeave={e=>e.currentTarget.style.background="transparent"}>
+              📥 Esporta messaggio
+            </div>
           </div>
         </div>
+      )}
 
-        {/* RIGHT: Modules + Globe (removed Network Uplink) */}
-        <div style={{display:"flex",flexDirection:"column",gap:10,minHeight:0}}>
-          <Panel title="Moduli Attivi" accent={C.purple} style={{flexShrink:0}}>
-            {["Core Model (Llama3)","Audio Input (Whisper)","Speech Synthesis","Vector DB (Chroma)","Mainframe Sync"].map(m => (
-              <div key={m} style={{display:"flex",justifyContent:"space-between",fontSize:10,padding:"4px 0",borderBottom:`1px solid ${C.cyanFaint}`}}>
-                <span>{m}</span><span style={{color:C.green}}>ONLINE</span>
-              </div>
-            ))}
-          </Panel>
-          <Panel title="Processi" accent={C.cyan} style={{flex:1,fontSize:10}}>
-            {metrics?.processes?.length ? metrics.processes.map(p => (
-              <div key={p.pid} style={{display:"flex",justifyContent:"space-between",padding:"2px 0",fontSize:9,borderBottom:`1px solid ${C.cyanFaint}`}}>
-                <span style={{overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap",flex:1}}>{p.name}</span>
-                <span style={{color:C.cyan,flexShrink:0,marginLeft:4}}>{p.cpu}%</span>
-              </div>
-            )) : <span style={{color:C.textFaint}}>Nessun dato</span>}
-          </Panel>
-          <Panel title="Globe" accent={C.green} style={{flexShrink:0,padding:"4px 8px"}}>
-            <GlobeImage />
-          </Panel>
-        </div>
-
-      </div>
+      {showVectorViz && <VectorViz onClose={()=>setShowVectorViz(false)} />}
     </div>
   );
 }

@@ -1,76 +1,101 @@
-# =============================================================================
-# J.A.R.V.I.S. - Configuration
-# =============================================================================
-
+actions:
+  enabled:
+  - system_control
+  - web_search
+  - media_player
+  - productivity
+  web_search:
+    engine: duckduckgo
+    max_results: 5
+audio:
+  channels: 1
+  input_device: default
+  output_device: default
+  sample_rate: 16000
+briefing:
+  city: Bologna
+  enabled: true
+  hour: 8
+  language: it
+  minute: 0
+focus:
+  block_sites: true
+  break_minutes: 5
+  long_break_minutes: 15
+  mute_notifications: true
+  work_minutes: 25
+git:
+  default_repo: .
+  log_default_n: 5
 llm:
-  provider: ollama
-  model: qwen2.5:14b
-  # reflection_model: qwen2.5:14b  # scommenta per usare un modello diverso per auto-valutazione
+  context_window: 8192
   embedding_model: mxbai-embed-large
   host: ${OLLAMA_HOST:-http://localhost:11434}
-  temperature: 0.3
-  context_window: 4096
-  num_gpu: -1           # -1 = auto (usa GPU se disponibile), 0 = CPU, N = numero layers GPU
-
-speech:
-  stt:
-    engine: faster-whisper
-    model: tiny
-    device: cpu
-    compute_type: int8
-    language: auto
-  tts:
-    engine: edge-tts
-    voice_sample: models/voice/jarvis_sample.wav
-    device: cpu
-    fallback:
-      engine: edge-tts
-      voice: it-IT-IsabellaNeural
-  wake_word:
-    engine: porcupine
-    keyword: jarvis
-    sensitivity: 0.5
-    model_path: models/porcupine/jarvis.ppn
-
-vision:
-  enabled: true
-  engine: yolov8
-  model: yolov8n.pt
-  device: cpu
-  camera_id: 0
-
+  model: qwen3.5:4b
+  num_gpu: -1
+  provider: ollama
+  reflection_model: qwen3.5:4b
+  temperature: 0.1
 memory:
+  long_term:
+    collection: jarvis_memories
+    engine: chroma
+    persist_dir: data/chroma_db
   short_term:
     engine: redis
     host: ${REDIS_HOST:-localhost}
     port: 6379
     ttl: 3600
-  long_term:
-    engine: chroma
-    persist_dir: data/chroma_db
-    collection: jarvis_memories
-
-actions:
-  enabled:
-    - system_control
-    - web_search
-    - media_player
-    - productivity
-  web_search:
-    engine: duckduckgo
-    max_results: 5
-
-audio:
-  input_device: default
-  output_device: default
-  sample_rate: 16000
-  channels: 1
-
+rag:
+  chunk_overlap: 100
+  chunk_size: 800
+  knowledge_folder: data/knowledge
+  watch_interval: 300
+rpa:
+  failsafe: true
+  move_duration: 0.3
+  screenshot_quality: 85
+  screenshots_dir: data/screenshots
 server:
+  cors_origins:
+  - http://localhost:5173
+  - http://localhost:3000
+  - http://localhost:80
+  - http://localhost
   host: 0.0.0.0
   port: 8765
-  cors_origins:
-    - http://localhost:5173
-    - http://localhost:3000
-    - http://localhost:80
-    - http://localhost
+speech:
+  stt:
+    compute_type: float16
+    device: cuda
+    engine: faster-whisper
+    language: auto
+    model: small
+  tts:
+    device: cuda
+    engine: kokoro
+    fallback:
+      engine: edge-tts
+      voice: it-IT-IsabellaNeural
+    kokoro_speed: 1.2
+    voice_sample: models/voice/jarvis_sample.wav
+  wake_word:
+    engine: porcupine
+    keyword: jarvis
+    model_path: models/porcupine/jarvis.ppn
+    sensitivity: 0.5
+terminal:
+  allowed_categories:
+  - info
+  - filesystem
+  - python
+  - docker_info
+  enabled: true
+  timeout: 15
+  working_dir: .
+vision:
+  camera_id: 0
+  device: cpu
+  enabled: true
+  engine: yolov8
+  model: yolov8n.pt

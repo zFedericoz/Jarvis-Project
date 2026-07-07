@@ -1,0 +1,9 @@
+FROM python:3.11-alpine
+
+RUN apk add --no-cache sqlite
+
+WORKDIR /app
+
+COPY scripts/backup_db.py scripts/backup_db.py
+
+ENTRYPOINT ["python", "scripts/backup_db.py", "--periodic", "60"]

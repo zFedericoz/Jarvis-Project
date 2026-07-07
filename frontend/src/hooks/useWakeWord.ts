@@ -13,6 +13,8 @@ export function useWakeWord({ onWake, enabled }: UseWakeWordProps) {
   const audioCtx = useRef<AudioContext | null>(null)
   const processor = useRef<ScriptProcessorNode | null>(null)
   const source = useRef<MediaStreamAudioSourceNode | null>(null)
+  const onWakeRef = useRef(onWake)
+  onWakeRef.current = onWake
 
   const connect = useCallback(async () => {
     if (!enabled) return
@@ -31,7 +33,9 @@ export function useWakeWord({ onWake, enabled }: UseWakeWordProps) {
       source.current = audioCtx.current.createMediaStreamSource(stream.current)
       processor.current = audioCtx.current.createScriptProcessor(512, 1, 1)
 
-      ws.current = new WebSocket(WAKE_WS_URL)
+      const token = localStorage.getItem("jwt_token")
+      const wsUrl = token ? `${WAKE_WS_URL}?token=${token}` : WAKE_WS_URL
+      ws.current = new WebSocket(wsUrl)
 
       ws.current.onopen = () => {
         source.current!.connect(processor.current!)
@@ -53,7 +57,7 @@ export function useWakeWord({ onWake, enabled }: UseWakeWordProps) {
           const msg = JSON.parse(event.data)
           if (msg.type === 'wake') {
             cleanup()
-            onWake()
+            onWakeRef.current()
           }
         } catch {}
       }
@@ -64,7 +68,7 @@ export function useWakeWord({ onWake, enabled }: UseWakeWordProps) {
     } catch (err) {
       console.error('Wake word mic error:', err)
     }
-  }, [enabled, onWake])
+  }, [enabled])
 
   const cleanup = useCallback(() => {
     processor.current?.disconnect()
